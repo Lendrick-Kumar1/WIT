@@ -13,7 +13,7 @@ Prototype to learn from: `prototype/pipeline.py`, `prototype/explain.py`, `docs/
 | Documents | ~233 trustee reports per cycle, ~6–7 trustees (US Bank, Wilmington, BNY Mellon, Citi, …) |
 | Pages to parse | ~20 per document after keyword page capture → **~4,700 pages per cycle** |
 | PDFs | Born-digital (text layer present). Borderless, dense, dashboard layouts, adjacent tables, multi-page tables |
-| Hardware | **CPU only, no GPU**, **16 GB RAM**, 4 physical cores (8 logical) |
+| Hardware | **CPU only, no GPU, Windows, 16 GB RAM (~5–6 GB free in practice)**, on both the dev laptop and the org laptop (see §2d) |
 | Current state | PyMuPDF page capture (keep it) + Camelot with hand-written coordinates + ~10k lines of if/try |
 | Best accuracy seen | Docling with `docling-layout-egret-large`, but ~4 min per 11 pages (~22 s/page) → ~28 CPU-hours per cycle |
 
@@ -67,24 +67,45 @@ Consequences:
    - If that's too slow, add the **fast path**: try geometry structure inside each box first, accept it if validation passes, and run TableFormer only on failures. Same components, ordered differently.
    - *Superseded by §2c: the fast path is now the default.*
 
-### 2c. Update: the machine has 16 GB RAM (supersedes the runtime plan in 2b)
+### 2c. Update: the machines have 16 GB RAM (supersedes the runtime plan in 2b)
 
-Hardware is CPU only, 16 GB RAM, 4 physical cores. Measured on `bny_1` pages 1/4/9, one worker
+Hardware is CPU only, 16 GB RAM (~5–6 GB actually free), 4 physical cores on the dev laptop. Measured on `bny_1` pages 1/4/9, one worker
 with 2 threads, full Docling (egret-large + TableFormer ACCURATE, OCR off): model load ~8 s, text-only
 page ~7 s, table pages 25–31 s, **peak RAM ~1.05 GB per worker**.
 
-1. **At most 2 Docling workers**, 2 torch/OMP threads each (2 × 2 = 4 physical cores).
-   The benchmark measures **peak RAM per worker**. If 2 workers don't fit with headroom, run 1.
+1. **Default 1 Docling worker** with threads = physical cores. **Never more than 2.**
+   `cli doctor --measure` measures peak RAM per worker and recommends 2 only if free RAM is
+   ≥ ~8 GB and ≥ 2 × peak + 4 GB headroom. The benchmark also records peak RAM per worker.
 2. **Streaming, not bulk.** Each worker loads its models once, then processes one page (or one
    document) at a time. Never hold a whole report, all page images, or all results in memory.
    Write each page's results to the cache and drop them.
 3. **The fast path is the default.**
    - Detect (egret) → geometry split → **geometry structure** → stitch → map → validate.
-   - Only tables that fail validation go to **TableFormer ACCURATE on that (sub-)box crop**
-     (mini-PDF), then re-validate; anything still failing goes to review.
+     Long and multi-page tables (asset lists, rating detail, etc.) always use geometry.
+   - **TableFormer ACCURATE runs only on (a) dashboard pages** (a page whose egret Table box
+     splits into 2+ sub-tables, or with 2+ adjacent tables) **and (b) tables that fail validation**.
+     It runs on that (sub-)box crop (mini-PDF), then re-validates; anything still failing goes to review.
+     Config: `routing.tableformer_on: [dashboard_page, validation_failure]`.
    - Full-page TableFormer (the 2b primary path) is kept only as the **baseline** in eval and bench.
-   - Why: at ~25 s/page, 4,700 pages × 2 workers ≈ 16 h wall time, which is too slow. Layout plus
-     geometry is ~1 s/page.
+   - Why: at ~25 s/page, 4,700 pages × 1 worker ≈ 33 h, which is far too slow. Egret layout
+     plus geometry is ~2–3 s/page measured (≈ 3–4 h per cycle on 1 worker), plus TableFormer on the
+     dashboard/failed minority.
+
+### 2d. Deployment: dev laptop → private GitHub repo → org laptop
+
+- Code ships by `git clone` of a **private GitHub repo**. Both machines are Windows, CPU only, 16 GB.
+- **Never in git:** PDFs, outputs, caches, model weights, `config/local.yaml` (`.gitignore` enforces it).
+- **Pinned environment:** Python `>=3.12,<3.13`; every dependency is pinned by the committed
+  `poetry.lock`. Install with `poetry sync`; change dependencies only on the dev machine (`poetry add`).
+- **Config layering, no machine values in code:** `config/defaults.yaml` < `config/local.yaml`
+  (git-ignored, from `local.example.yaml`) < env vars (`DOCLING_ARTIFACTS_PATH`, `TE_REPORTS_DIR`,
+  `TE_WORKERS`, `TE_THREADS`, `TE_YOLO_WEIGHTS`).
+- **Models:** Docling models are fetched once with
+  `docling-tools models download-hf-repo docling-project/docling-layout-egret-large docling-project/docling-models`
+  or copied from `~/.cache/docling/models`. YOLO weights are **GitHub Release assets**
+  (`gh release download`). Runtime is always offline.
+- **`cli doctor`** checks Python, installed deps vs `poetry.lock`, model files, offline mode, reports
+  folder, free RAM and cores, and prints the recommended worker count. Step-by-step: `docs/SETUP.md`.
 
 ---
 
@@ -222,7 +243,7 @@ Re-running after a config change recomputes only what changed.
 trustee-extract/
 ├── CLAUDE.md                      # instructions for Claude Code (short)
 ├── pyproject.toml
-├── docs/ARCHITECTURE.md, docs/PIPELINE_GUIDE.md
+├── docs/ARCHITECTURE.md, docs/PIPELINE_GUIDE.md, docs/SETUP.md (new machine setup)
 ├── prototype/                     # pipeline.py, explain.py: reference only, don't import
 ├── src/trustee_extract/
 │   ├── core/        types.py, page_model.py, cache.py, numbers.py (parse 1,234.5 / (1.0) / %)
@@ -233,8 +254,9 @@ trustee-extract/
 │   ├── route/       ladder.py           # escalation + confidence
 │   ├── review/      overlay.py, labelstudio_export.py, apply_corrections.py
 │   ├── io/          export_excel.py, export_parquet.py
-│   └── cli.py       # extract | explain | bench | eval | review-export
-├── config/  defaults.yaml, trustees/{bny,usbank,wilmington,...}.yaml, schema.yaml
+│   ├── doctor.py    # machine checks + worker recommendation
+│   └── cli.py       # extract | explain | bench | eval | doctor | review-export
+├── config/  defaults.yaml, local.example.yaml (→ local.yaml, git-ignored), trustees/{bny,usbank,wilmington,...}.yaml, schema.yaml
 ├── reports/ sample PDFs bny_1..3, citi_1, us_1..3 (git-ignored)
 ├── data/    golden/manifest.yaml + golden/<trustee>/<doc>/{expected tables}, cache/
 ├── train/yolo/  Label Studio → YOLO conversion (split by document), YOLO11s training script
@@ -278,7 +300,7 @@ Output: `bench/results.csv` plus a 1-page summary.
 
 **Task 6: Review loop.** Overlay PNG + table + failed checks. Export to Label Studio with predictions. Import corrections into the golden set and training data.
 
-**Task 7: Batch runner.** `multiprocessing` pool with **≤ 2 workers**, one model instance per worker, page-at-a-time streaming (never whole reports in memory), cache, resumable, per-document logs, run report (auto-accept % per trustee).
+**Task 7: Batch runner.** `multiprocessing` pool with `runtime.workers` (**default 1, max 2**, per `cli doctor`), one model instance per worker, page-at-a-time streaming (never whole reports in memory), cache, resumable, per-document logs, run report (auto-accept % per trustee).
 
 **Task 8: Pluggable detector + YOLO11 (unconditional; see §4).**
 - `Detector` implementations: `EgretDetector` (baseline) and `YoloDetector` (fine-tuned YOLO11 via ultralytics).
@@ -295,7 +317,7 @@ Output: `bench/results.csv` plus a 1-page summary.
 
 ## 9. Throughput estimate (to be replaced by Task 0 numbers)
 
-| Stage | Per page | 4,700 pages, 1 worker × 4 threads | With 2 workers × 2 threads |
+| Stage | Per page | 4,700 pages, 1 worker × 4 threads (default) | With 2 workers × 2 threads (only if doctor allows) |
 |---|---|---|---|
 | PyMuPDF words + render @100 dpi | ~0.05–0.1 s | ~6 min | ~2 min |
 | egret-large layout | ~0.5 s (paper) | ~40 min | ~10–15 min* |
@@ -305,7 +327,7 @@ Output: `bench/results.csv` plus a 1-page summary.
 
 Compare: current full Docling run ≈ 28 CPU-hours.
 \*Depends on core count; set `OMP_NUM_THREADS` / torch threads per worker so that
-workers × threads ≤ physical cores (4). **RAM is a constraint at 16 GB: max 2 Docling workers** (see §2c).
+workers × threads ≤ physical cores (4). **RAM is a constraint at 16 GB with ~5–6 GB free: default 1 Docling worker, max 2** (see §2c).
 
 ---
 

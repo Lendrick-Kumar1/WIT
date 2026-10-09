@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from trustee_extract.core.config import docling_artifacts_path, load_config
+from trustee_extract.core.config import docling_artifacts_path, load_config, threads_per_worker
 from trustee_extract.core.types import Box
 
 # Docling layout label -> our annotation class. Anything else is ignored.
@@ -57,7 +57,7 @@ def build_pipeline_options(cfg: dict | None = None, table_structure: bool = True
         ),
         layout_options=LayoutObjectDetectionOptions.from_preset(d["layout_preset"]),
         accelerator_options=AcceleratorOptions(
-            num_threads=d["num_threads"], device=AcceleratorDevice.CPU
+            num_threads=threads_per_worker(cfg), device=AcceleratorDevice.CPU
         ),
     )
 

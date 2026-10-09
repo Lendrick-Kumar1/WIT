@@ -4,11 +4,20 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# data (client PDFs and generated outputs stay local)
-reports/*.pdf
+# per-machine config (copy config/local.example.yaml)
+config/local.yaml
+CLAUDE.local.md
+
+# never commit client PDFs, outputs, caches or model weights
+*.pdf
+!tests/fixtures/*.pdf
+reports/
 data/raw/
 data/cache/
 out/
 bench/*.csv
-
-CLAUDE.local.md
+runs/
+models/
+*.pt
+*.onnx
+*.safetensors

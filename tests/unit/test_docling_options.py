@@ -2,7 +2,7 @@ import os
 
 import pytest
 
-from trustee_extract.core.config import docling_artifacts_path, load_config
+from trustee_extract.core.config import build_config, docling_artifacts_path, load_config
 
 
 @pytest.fixture
@@ -17,12 +17,11 @@ def test_defaults_are_offline_egret_accurate_no_ocr():
     assert d["do_ocr"] is False
     assert d["layout_preset"] == "layout_egret_large"
     assert d["table_mode"] == "accurate"
-    assert d["num_threads"] * 2 <= os.cpu_count()  # 2 workers max
 
 
-def test_env_overrides_artifacts_path(monkeypatch, tmp_path):
-    monkeypatch.setenv("DOCLING_ARTIFACTS_PATH", str(tmp_path))
-    assert docling_artifacts_path() == tmp_path
+def test_env_overrides_artifacts_path(tmp_path):
+    cfg = build_config(env={"DOCLING_ARTIFACTS_PATH": str(tmp_path)})
+    assert docling_artifacts_path(cfg) == tmp_path
 
 
 def test_pipeline_options(cfg, monkeypatch):
@@ -37,6 +36,7 @@ def test_pipeline_options(cfg, monkeypatch):
     assert opts.table_structure_options.mode.value == "accurate"
     assert opts.layout_options.model_spec.repo_id == "docling-project/docling-layout-egret-large"
     assert str(opts.artifacts_path) == cfg["docling"]["artifacts_path"]
+    assert opts.accelerator_options.num_threads >= 1
 
 
 def test_missing_models_raise(cfg, monkeypatch, tmp_path):

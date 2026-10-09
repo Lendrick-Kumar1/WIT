@@ -20,7 +20,7 @@ from pathlib import Path
 import pymupdf
 import yaml
 
-from trustee_extract.core.config import load_config, sha256_file
+from trustee_extract.core.config import load_config, resolve_path, sha256_file
 
 LABEL_CONFIG = """<View>
   <Header value="One box per table. Adjacent tables (side by side or stacked without a gap) get separate boxes. table_title = the title line directly above a table."/>
@@ -63,12 +63,13 @@ def to_result(box, page_w: float, page_h: float, img_w: int, img_h: int, idx: in
 
 
 def export(pdfs: list[Path], out: Path, pages: str | None = None,
-           golden_manifest: Path = Path("data/golden/manifest.yaml"),
+           golden_manifest: Path | None = None,
            url_prefix: str = "/data/local-files/?d=labelstudio/images", detector=None) -> int:
     from trustee_extract.cli import parse_pages
     from trustee_extract.detect.docling_layout import EgretDetector
 
     cfg = load_config()
+    golden_manifest = golden_manifest or resolve_path(cfg["paths"]["golden_manifest"])
     dpi = cfg["labelstudio"]["render_dpi"]
     classes = cfg["labelstudio"]["classes"]
     excluded = golden_hashes(golden_manifest)

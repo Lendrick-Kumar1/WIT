@@ -1,4 +1,4 @@
-"""Command line: extract | explain | bench | eval | review-export.
+"""Command line: extract | explain | bench | eval | doctor | review-export.
 
     poetry run python -m trustee_extract.cli extract reports/bny_1.pdf --pages 1,4 --out out/
 """
@@ -70,9 +70,15 @@ def cmd_review_export(args) -> int:
     from trustee_extract.review.labelstudio_export import export
 
     n = export([Path(p) for p in args.pdfs], Path(args.out), pages=args.pages,
-               golden_manifest=Path(args.golden), url_prefix=args.url_prefix)
+               golden_manifest=Path(args.golden) if args.golden else None, url_prefix=args.url_prefix)
     print(f"exported {n} page tasks to {args.out}")
     return 0
+
+
+def cmd_doctor(args) -> int:
+    from trustee_extract.doctor import run
+
+    return run(args.measure, args.pdf, args.page)
 
 
 def not_yet(task: str):
@@ -104,11 +110,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("golden", nargs="?", default="data/golden")
     p.set_defaults(func=not_yet("Task 1"))
 
+    p = sub.add_parser("doctor", help="check this machine; recommend worker count")
+    p.add_argument("--measure", action="store_true", help="convert one real page to measure peak RAM per worker")
+    p.add_argument("--pdf", type=Path, default=None, help="PDF for --measure (default: first in reports dir)")
+    p.add_argument("--page", type=int, default=None, help="page for --measure (default: densest of first 10)")
+    p.set_defaults(func=cmd_doctor)
+
     p = sub.add_parser("review-export", help="Label Studio tasks with egret pre-annotations")
     p.add_argument("pdfs", nargs="+")
     p.add_argument("--out", default="out/labelstudio")
     p.add_argument("--pages", default=None, help="1-based page spec applied to every PDF (default: all)")
-    p.add_argument("--golden", default="data/golden/manifest.yaml", help="docs listed here are excluded")
+    p.add_argument("--golden", default=None, help="manifest of golden docs to exclude (default: config paths.golden_manifest)")
     p.add_argument("--url-prefix", default="/data/local-files/?d=labelstudio/images")
     p.set_defaults(func=cmd_review_export)
 
