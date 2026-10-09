@@ -1,0 +1,14 @@
+# environments
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# data (client PDFs and generated outputs stay local)
+reports/*.pdf
+data/raw/
+data/cache/
+out/
+bench/*.csv
+
+CLAUDE.local.md

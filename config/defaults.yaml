@@ -1,0 +1,14 @@
+# Global defaults. No page coordinates here (see CLAUDE.md rules).
+
+docling:
+  # Pre-cached models; run fully offline (HF_HUB_OFFLINE=1). Override with env DOCLING_ARTIFACTS_PATH.
+  artifacts_path: C:/Users/hp/.cache/docling/models
+  layout_preset: layout_egret_large  # layout_egret_medium | layout_egret_large | layout_egret_xlarge | layout_heron_default
+  do_ocr: false                    # born-digital PDFs: text comes from the PDF text layer
+  table_mode: accurate             # accurate | fast
+  do_cell_matching: true           # map PDF words onto predicted cells
+  num_threads: 2                   # per worker; max 2 workers x 2 threads = 4 physical cores
+
+labelstudio:
+  render_dpi: 144
+  classes: [table, table_title, section_header, key_value_block]
