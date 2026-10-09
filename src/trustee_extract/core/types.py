@@ -53,7 +53,9 @@ class LogicalTable:
     name: str
     pages: list[int]
     df: "pd.DataFrame"
-    grids: list[TableGrid]
+    grids: list[TableGrid] = field(default_factory=list)
+    checks: list[dict] = field(default_factory=list)  # S8 total checks
+    note: str = ""  # e.g. "There are no ... to report"
 
 
 @dataclass

@@ -1,6 +1,7 @@
-"""Command line: extract | explain | bench | eval | doctor | review-export.
+"""Command line: extract | docling | explain | bench | eval | doctor | review-export.
 
-    poetry run python -m trustee_extract.cli extract reports/bny_1.pdf --pages 1,4 --out out/
+    poetry run python -m trustee_extract.cli extract reports/bny_3.pdf --out out/
+    poetry run python -m trustee_extract.cli docling reports/citi_1.pdf:3-5 reports/bny_1.pdf:2-3
 """
 
 from __future__ import annotations
@@ -21,48 +22,58 @@ def parse_pages(spec: str) -> list[int]:
     return sorted(pages)
 
 
-def cmd_extract(args) -> int:
-    # Current state: Docling primary path (egret + TableFormer ACCURATE, OCR off) per page.
-    # Splitter, mapping and validation arrive in later tasks.
+def cmd_docling(args) -> int:
+    """Docling (egret + TableFormer ACCURATE, OCR off) on selected pages; models load once.
+
+    Writes out/<stem>/docling/: p<NNN>_t<K>.csv, docling.xlsx (one sheet per table), docling.json.
+    """
+    import pandas as pd
+
     from trustee_extract.core.config import sha256_file
     from trustee_extract.detect.docling_layout import build_converter, layout_boxes
 
-    pdf = Path(args.pdf)
-    out = Path(args.out) / pdf.stem
-    out.mkdir(parents=True, exist_ok=True)
-
     t0 = time.perf_counter()
     converter = build_converter()
-    report = {"pdf": str(pdf), "sha256": sha256_file(pdf), "model_load_s": None, "pages": []}
-    report["model_load_s"] = round(time.perf_counter() - t0, 2)
+    load_s = round(time.perf_counter() - t0, 2)
 
-    for page in parse_pages(args.pages):
-        t = time.perf_counter()
-        res = converter.convert(pdf, page_range=(page, page))
-        elapsed = time.perf_counter() - t
-        doc = res.document
-        tables = []
-        for i, table in enumerate(doc.tables, 1):
-            df = table.export_to_dataframe(doc=doc)
-            csv = out / f"p{page:03d}_t{i}.csv"
-            df.to_csv(csv, index=False)
-            prov = table.prov[0] if table.prov else None
-            tables.append({
-                "csv": csv.name,
-                "shape": list(df.shape),
-                "bbox": prov.bbox.to_top_left_origin(doc.pages[prov.page_no].size.height).as_tuple() if prov else None,
+    for target in args.targets:
+        pdf_s, _, spec = target.rpartition(":")
+        pdf = Path(pdf_s)
+        out = Path(args.out) / pdf.stem / "docling"
+        out.mkdir(parents=True, exist_ok=True)
+        report = {"pdf": str(pdf), "sha256": sha256_file(pdf), "model_load_s": load_s, "pages": []}
+        sheets = {}
+        for page in parse_pages(spec):
+            t = time.perf_counter()
+            res = converter.convert(pdf, page_range=(page, page))
+            elapsed = time.perf_counter() - t
+            doc = res.document
+            tables = []
+            for i, table in enumerate(doc.tables, 1):
+                df = table.export_to_dataframe(doc=doc)
+                name = f"p{page:03d}_t{i}"
+                df.to_csv(out / f"{name}.csv", index=False)
+                sheets[name] = df
+                prov = table.prov[0] if table.prov else None
+                tables.append({
+                    "name": name,
+                    "shape": list(df.shape),
+                    "bbox": prov.bbox.to_top_left_origin(doc.pages[prov.page_no].size.height).as_tuple() if prov else None,
+                })
+            report["pages"].append({
+                "page": page,
+                "status": res.status.value,
+                "seconds": round(elapsed, 2),
+                "layout_boxes": len(layout_boxes(res)),
+                "tables": tables,
             })
-        report["pages"].append({
-            "page": page,
-            "status": res.status.value,
-            "seconds": round(elapsed, 2),
-            "layout_boxes": len(layout_boxes(res)),
-            "tables": tables,
-        })
-        print(f"page {page}: {res.status.value}, {len(tables)} tables, {elapsed:.1f}s")
-
-    (out / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(f"model load {report['model_load_s']}s; wrote {out / 'report.json'}")
+            print(f"{pdf.name} p{page}: {res.status.value}, {len(tables)} tables, {elapsed:.1f}s", flush=True)
+        if sheets:
+            with pd.ExcelWriter(out / "docling.xlsx") as xw:
+                for name, df in sheets.items():
+                    df.to_excel(xw, sheet_name=name, index=False)
+        (out / "docling.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    print(f"model load {load_s}s")
     return 0
 
 
@@ -92,11 +103,10 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="trustee_extract")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    p = sub.add_parser("extract", help="extract tables from one PDF")
-    p.add_argument("pdf")
-    p.add_argument("--pages", required=True, help="1-based, e.g. 1,4,7-9")
+    p = sub.add_parser("docling", help="Docling on selected pages, e.g. reports/citi_1.pdf:3-5")
+    p.add_argument("targets", nargs="+", help="<pdf>:<pages>, pages 1-based like 1,4,7-9")
     p.add_argument("--out", default="out")
-    p.set_defaults(func=cmd_extract)
+    p.set_defaults(func=cmd_docling)
 
     p = sub.add_parser("explain", help="stage-by-stage PNG for one page")
     p.add_argument("pdf"); p.add_argument("page", type=int)
