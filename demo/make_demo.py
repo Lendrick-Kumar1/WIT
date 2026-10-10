@@ -20,7 +20,6 @@ DEALS = [  # deal name, trustee (as the org deal list would spell it), sample fi
     ("Arini European CLO I DAC", "Citibank", "citi_1.pdf", "Monthly Trustee Report"),
     ("Anchorage Capital Europe CLO 5 DAC", "U.S. Bank", "us_1.pdf", "Monthly Trustee Report"),
     ("Segovia European CLO 3-2017 DAC", "U.S. Bank", "us_2.pdf", "Monthly Trustee Report"),
-    ("Carlyle Euro CLO 2013-1 DAC", "U.S. Bank", "us_3.pdf", "Monthly Trustee Report"),
     ("Example Wilmington CLO", "Wilmington Trust", None, None),                         # no report
 ]
 rows = []

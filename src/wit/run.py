@@ -5,9 +5,9 @@
   python run.py some.pdf other.pdf                  # ad-hoc files (trustee detected from text)
   python run.py reports/us_1.pdf --debug 3,5        # per-page debug
 
-Outputs (out/): Balance.xlsx, Performance.xlsx, Collateral.xlsx (the 3 deliverables),
-                _run_report.xlsx (one row per report: what was found, what needs a look),
-                <deal>.xlsx per report (all sheets + sources/status, for checking).
+Outputs:  out/<period>/<Deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx   (clean, schema only)
+          out/<period>/_run_report.xlsx   (all checks in one file: summary, balance_sources,
+                                           performance_flags, collateral_gaps)
 """
 import argparse
 import re
@@ -99,26 +99,34 @@ def process(pdf, defaults, trustees, meta=None):
     return report, perf, bal, bal_src, coll, empty_cols
 
 
-def write_outputs(results, out):
-    out.mkdir(exist_ok=True)
-    allp, allb, allc, rep = [], [], [], []
+def write_outputs(results, out, period=""):
+    """out/<period>/<Deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx  (clean schema only)
+       out/<period>/_run_report.xlsx  (ONE file with all checks: summary + details per deal)"""
+    root = out / (period or "adhoc")
+    root.mkdir(parents=True, exist_ok=True)
+    summary, bal_checks, perf_flags, gaps = [], [], [], []
     for report, perf, bal, bal_src, coll, empty_cols in results:
-        rep.append(report)
-        safe = re.sub(r"[^\w.-]+", "_", report["deal"] or Path(report["pdf"]).stem)
-        with pd.ExcelWriter(out / f"{safe}.xlsx") as xw:
-            bal.to_excel(xw, sheet_name="Balance", index=False)
-            perf.to_excel(xw, sheet_name="Performance", index=False)
-            coll.to_excel(xw, sheet_name="Collateral", index=False)
-            bal_src.to_excel(xw, sheet_name="_balance_sources", index=False)
-            pd.DataFrame({"empty collateral columns": empty_cols}).to_excel(xw, sheet_name="_gaps", index=False)
-        allp.append(perf.drop(columns=["_status", "_page"], errors="ignore"))
-        allb.append(bal)
-        allc.append(coll.drop(columns=["_pages"], errors="ignore"))
-    pd.concat(allb).to_excel(out / "Balance.xlsx", index=False)
-    pd.concat(allp).to_excel(out / "Performance.xlsx", index=False)
-    pd.concat(allc).to_excel(out / "Collateral.xlsx", index=False)
-    pd.DataFrame(rep).to_excel(out / "_run_report.xlsx", index=False)
-    return pd.DataFrame(rep)
+        deal = report["deal"] or Path(report["pdf"]).stem
+        d = root / re.sub(r'[<>:"/\\|?*]+', "_", deal).strip()
+        d.mkdir(parents=True, exist_ok=True)
+        bal.to_excel(d / "Balance.xlsx", index=False)
+        perf.drop(columns=["_status", "_page"], errors="ignore").to_excel(d / "Performance.xlsx", index=False)
+        coll.drop(columns=["_pages"], errors="ignore").to_excel(d / "Collateral.xlsx", index=False)
+        summary.append(report)
+        if len(bal_src):
+            bal_checks.append(bal_src.assign(deal=deal))
+        if len(perf):
+            f = perf[perf["_status"] != "ok"]
+            if len(f):
+                perf_flags.append(f.assign(deal=deal)[["deal", "test", "current", "trigger", "result",
+                                                       "_status", "_page"]])
+        gaps += [{"deal": deal, "empty collateral column": c} for c in empty_cols]
+    with pd.ExcelWriter(root / "_run_report.xlsx") as xw:
+        pd.DataFrame(summary).to_excel(xw, sheet_name="summary", index=False)
+        (pd.concat(bal_checks) if bal_checks else pd.DataFrame()).to_excel(xw, sheet_name="balance_sources", index=False)
+        (pd.concat(perf_flags) if perf_flags else pd.DataFrame()).to_excel(xw, sheet_name="performance_flags", index=False)
+        pd.DataFrame(gaps).to_excel(xw, sheet_name="collateral_gaps", index=False)
+    return root
 
 
 def main(argv=None):
@@ -164,7 +172,8 @@ def main(argv=None):
                                          "needs_attention", "seconds")})
             results.append(r)
     if results:
-        write_outputs(results, Path(a.out))
+        root = write_outputs(results, Path(a.out), a.period or "")
+        print(f"\noutput: {root.resolve()}")
 
 
 if __name__ == "__main__":

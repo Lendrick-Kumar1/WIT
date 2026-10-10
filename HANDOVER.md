@@ -79,7 +79,7 @@ WIT/
 │   ├── performance.py, balance.py, collateral.py, geometry.py
 │   └── run.py                    orchestration, statuses, Excel outputs
 ├── demo/make_demo.py             builds an org-style demo tree from reports/
-└── out/  Balance.xlsx  Performance.xlsx  Collateral.xlsx  _run_report.xlsx  <deal>.xlsx
+└── out/<period>/<Deal>/{Balance,Performance,Collateral}.xlsx  +  out/<period>/_run_report.xlsx
 ```
 
 ## 7. What you do next
