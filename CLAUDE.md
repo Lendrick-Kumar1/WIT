@@ -1,77 +1,63 @@
-# trustee-extract
+# WIT — CLO trustee report field extraction
 
-Extract tables from born-digital trustee reports (US Bank, Wilmington, BNY Mellon, Citi, …)
-into validated, canonical data. About 233 PDFs × ~20 captured pages per cycle.
-**CPU only, no GPU, Windows, 16 GB RAM with only ~5–6 GB free in practice.**
-Developed on this laptop, deployed by cloning a **private GitHub repo** onto an org laptop with the same limits.
-Setup on a new machine: `docs/SETUP.md`.
+## Goal
+Read monthly CLO trustee reports (born-digital PDFs) and fill **3 standardized Excel outputs**:
 
-Full design and decisions: @docs/ARCHITECTURE.md
-How the geometry engine works (stages S1–S10, thresholds): `docs/PIPELINE_GUIDE.md` (read when working on geometry)
-Reference prototype (do not import, port it): `prototype/pipeline.py`, `prototype/explain.py`.
-It was tuned on `reports/bny_3.pdf` (its "pages 4, 9, 10, 37" are bny_3 pages).
+| Output | Content | Shape |
+|---|---|---|
+| **Balance** | ~5 summary values (aggregate principal balance, CCC balance, …) | 1 row per report |
+| **Performance** | Compliance/coverage/collateral-quality tests. The list of tests **varies by trustee and deal**; columns are generic (Test, Current, Threshold/Trigger, Result, …) | N rows per report |
+| **Collateral** | 31 issuer-level columns (ratings, industry, balances, …) **joined from several long tables**, which may span many pages | 1 row per issuer/security |
 
-## Architecture in one line
-Existing keyword page capture → **detector** (egret-large layout, OCR off; fine-tuned YOLO11 later)
-→ **geometry split of each Table box** (XY-cut + row-alignment; fixes dashboards)
-→ **geometry structure** (default, incl. long multi-page tables) → stitch → YAML mapping → validation.
-**TableFormer ACCURATE runs only on dashboard pages and on tables that fail validation**, on the
-(sub-)box crop → re-validate → review queue. See ARCHITECTURE.md §2c and §2d.
+Exact field lists and stakeholder validation ranges will be added to `config/` later. Until then, extract the source tables generically.
+
+## Constraints
+- CPU only, **16 GB RAM (about 5–6 GB free)**, 4 cores. Develop here, deploy by cloning a **private GitHub repo** onto an identical org laptop. Windows / Git Bash.
+- Real reports are on the org server; `reports/` holds 7 public samples: bny_1-3, citi_1, us_1-3.
+- **About 233 reports per cycle, ~20 relevant pages each.** Speed matters.
+- Docling models are cached in `C:/Users/hp/.cache/docling/models` (egret-large, heron, TableFormer). Run offline.
+
+## What failed before (do not repeat)
+- `page.find_tables()` as the first pass splits single borderless tables in two, so about 85% of pages went to Docling. Too slow.
+- Docling egret-large + TableFormer ACCURATE: good on normal tables, about 22 s/page. On **dashboard pages it detects no tables at all**. TableFormer FAST merges cells unpredictably.
+- Camelot with hard-coded coordinates: breaks whenever the layout shifts.
+
+## Approach
+1. **PyMuPDF first, always.** Words and drawings from the text layer. Never OCR.
+2. **Per output:**
+   - **Balance:** find fields by **label text and synonyms from config** (never coordinates), and read the value in the same row or under the right column header.
+   - **Performance:** find the tests table(s) by header words (Test / Current / Trigger|Threshold / Result synonyms) and take **all rows**. No fixed test list.
+   - **Collateral:** long-table geometry (gutters inside a region) + **cross-page stitching** (`prototype/pipeline.py`), then **join tables on security ID** (LX…/ISIN).
+3. **Validate everything:**
+   - totals and subtotals equal their rows;
+   - Result (Pass/Fail) agrees with Current vs Threshold;
+   - collateral balances sum to the aggregate principal balance;
+   - stakeholder ranges, when provided.
+   - Do **not** use two-source agreement; the same field can legitimately differ between pages.
+4. **Docling (egret-large, OCR off, TableFormer ACCURATE) is a fallback only:** for a page whose required table or field is missing or fails validation. Load it once per process. 1 worker by default.
+
+## Known PDF quirks
+- **us_1 and us_2 pages are `/Rotate 90`.** Transform all words and drawings with `page.rotation_matrix`.
+- Visual separators differ by layout. Use them for segmentation along with whitespace:
+  - Citi: filled title bars;
+  - us_3: stroked boxes;
+  - bny_1/bny_2: shaded alternating rows and bold section headings.
+- Layouts seen so far: BNY-A (bny_1, bny_2), BNY-B (bny_3), Citi/Virtus (citi_1), US-A (us_1, us_2), US-B (us_3).
 
 ## Rules
-- Text always comes from the PDF text layer (PyMuPDF). Never OCR born-digital pages. Docling: `do_ocr=False`.
-- Never put page coordinates in config. Trustee YAML matches on text (titles, header words) only.
-- Every table must pass validation (totals, cross-table, formulas, domain) to be auto-accepted.
-- Expensive models (TableFormer, LLM) run only on dashboard pages or tables that failed validation, and only on that crop
-  (`routing.tableformer_on` in config).
-- Every extracted cell keeps provenance: pdf sha256, page (1-based), cell bbox.
-- Stages are pure and cached by `sha256 + page + stage + version + config_hash`.
-- Memory: **default 1 Docling worker** (`runtime.workers`); 2 only when `cli doctor` recommends it
-  (free RAM ≥ ~8 GB after measuring per-worker peak). Never more than 2. Load models once per worker.
-  Process one page (or one document) at a time; never load whole reports or all page images into memory.
-- **No machine-specific values in code or `defaults.yaml`.** Workers, threads, models path, reports path,
-  YOLO weights go in `config/local.yaml` (git-ignored) or env vars (`DOCLING_ARTIFACTS_PATH`, `TE_REPORTS_DIR`,
-  `TE_WORKERS`, `TE_THREADS`, `TE_YOLO_WEIGHTS`). Read them via `core/config.py`.
-- **Never commit** PDFs, outputs, caches or model weights (`.gitignore` enforces it). YOLO weights ship as
-  GitHub Release assets. Dependencies are pinned by `poetry.lock`; change them only with `poetry add` on the dev machine.
-- Detectors are pluggable behind `Detector` (`detect/docling_layout.py` egret, `detect/yolo.py` YOLO11).
-- The golden set never goes into detector training data (split by document, golden docs excluded by sha256).
-- Do not change thresholds or logic without running `cli eval` on the golden set; no golden regression allowed.
+- No page coordinates in config or code. Match on text; compute geometry per page.
+- Every extracted value keeps provenance (report, page, bbox).
+- Keep it simple: no YOLO, no Label Studio, no review UI for now.
+- Config and paths live in `config/` + `config/local.yaml` (git-ignored). Never commit PDFs, outputs or models.
+- Small steps. After each step, show real output on the sample reports before moving on.
 
-## Layout
-- `src/trustee_extract/` (core, detect, structure, assemble, validate, route, review, io)
-- `config/` (defaults.yaml, local.example.yaml → local.yaml git-ignored, trustees/*.yaml, schema.yaml)
-- `reports/` (default `paths.reports`): the sample PDFs (git-ignored): `bny_1..3.pdf` (BNY Mellon), `citi_1.pdf` (Citi),
-  `us_1..3.pdf` (US Bank; us_1/us_2 share one template, us_3 uses a different "Summary" template)
-- `data/golden/` (manifest.yaml + expected tables), `data/cache/`
-- `train/yolo/` (later: Label Studio → YOLO conversion, YOLO11s training); weights in `models/yolo/` (git-ignored)
-- `tests/`
-
-## Commands (Poetry; add deps with `poetry add`, dev deps with `poetry add --group dev`)
-- `poetry run python -m trustee_extract.cli doctor [--measure]` → checks machine, recommends worker count
-- `poetry run python -m trustee_extract.cli extract <pdf> --pages 1,4 --out out/` → CSVs + report.json (Docling for now)
-- `poetry run python -m trustee_extract.cli review-export reports/x.pdf --pages 3-5` → Label Studio tasks with egret pre-annotations
-- `poetry run python -m trustee_extract.cli bench reports/ --pages-from capture` → bench/results.csv (s/page, peak RAM)
-- `poetry run python -m trustee_extract.cli explain <pdf> <page>`                 → stage-by-stage PNG
-- `poetry run python -m trustee_extract.cli eval data/golden/`                    → per-trustee metrics
-- `poetry run pytest -q` (fast) · `poetry run pytest -q -m slow` (runs real Docling models)
-
-## Environment notes
-- Developer machine: Windows (Git Bash / MINGW64). Use `pathlib`, no shell-specific paths.
-- Docling 2.135 models: default `~/.cache/docling/models` (`docling.artifacts_path`; override per machine).
-  Work offline: `HF_HUB_OFFLINE=1` is set by `detect/docling_layout.set_offline_env()`; never download at runtime.
-- Docling 2.135 options: `PdfPipelineOptions(artifacts_path, do_ocr, do_table_structure,
-  layout_options=LayoutObjectDetectionOptions.from_preset("layout_egret_large"),  # LayoutOptions is deprecated
-  table_structure_options=TableStructureOptions(mode=TableFormerMode.ACCURATE),
-  accelerator_options=AcceleratorOptions(num_threads, device))`. Names change across versions; check before use.
-- Measured on the dev laptop (bny_1, 1 worker × 2 threads, full Docling): model load ~8 s; table pages 25–31 s/page;
-  peak RAM ~1.05 GB/worker. Egret layout-only: ~2–3 s/page.
-- YOLO11s training on Windows CPU: `imgsz≈1024`, `batch=4`, `workers=0`, `device="cpu"`.
-
-## Current task (in order)
-1. Golden set + eval harness (ARCHITECTURE.md §8 Task 1). Include the dashboard pages that fail today.
-2. Baseline: egret-large + TableFormer ACCURATE (OCR off) on the golden set; record metrics, s/page, peak RAM per worker.
-3. Port geometry (Task 2) + dashboard splitter: XY-cut inside each egret Table box, geometry structure per sub-box.
-4. Validation + mapping for the first 3 trustees; TableFormer on failing sub-box crops only (mini-PDF).
-5. Batch runner: `runtime.workers` (default 1, max 2), page-at-a-time, cache, resumable.
-6. Detector track (Task 8): Label Studio export (done) → corrections → `train/yolo/` → YOLO11s; compare on golden.
+## Plan
+1. **Collateral long tables (biggest speed win):**
+   - Port the prototype's geometry, stitching and totals validation into `src/wit/`, with the rotation and separator fixes.
+   - Run it on all 7 reports and output the stitched tables + validation to `out/<report>/`.
+   - Report: pages handled without Docling, validation pass/fail, and seconds per report.
+2. **Performance:** detect tests tables by header words on dashboard and test pages, across all 7 reports.
+3. **Balance:** label-based field lookup (draft labels from the samples; real field list comes later).
+4. **Docling fallback** wired in for failures only; measure the total time per report.
+5. Excel writers for the 3 outputs (once the field lists arrive) + stakeholder range checks.
+6. Batch runner + `cli doctor` + `docs/SETUP.md` for the org laptop.
