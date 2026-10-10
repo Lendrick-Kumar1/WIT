@@ -20,10 +20,17 @@ Born-digital trustee PDFs → 3 Excel outputs (Balance, Performance, Collateral)
 - All trustee differences live in `config/trustees/<name>.yaml`. No `if trustee ==` in code. No coordinates.
 - Always use `pdfpage.page_model()` for text: it fixes `/Rotate 90` and treats thin images as separators.
 
-## Current experiment
-`EXPERIMENT_crop_test.md`: XLarge + TableFormer on deterministic PyMuPDF crops vs full pages
-(`tools/crop_test.py`, crops from `src/wit/crops.py`). Do not change the main pipeline until the
-results are in. Help run the test and summarise `out/crop_test/summary.xlsx`.
+## Current step (after the crop test)
+Crop test result (XLarge on crops vs PyMuPDF): crops fix XLarge's segmentation errors, but XLarge
+misses small crops (key-value boxes, 1-row tables) and takes 3-16 s per crop. PyMuPDF reading
+**one crop = one table** (`src/wit/croptable.py`) matched or beat it on every crop.
+- `crops.find_crops(page)` -> crop rects; `croptable.read_crop(crop_page)` -> one DataFrame with
+  `_row` (detail|subtotal|total) and `_check` (ok | check: ...).
+- Grouped tables: group columns copied down, "<group>" + "<amount>" lines = one subtotal row,
+  every subtotal/total checked against the sum of its rows.
+- Not yet wired into the main pipeline (`run.py`). Next: use crops + read_crop for Collateral,
+  stitch groups/totals across pages (clears the "rows may start on an earlier page" flags),
+  then XLarge only for crops whose checks fail.
 
 ## Commands
 - `python demo/make_demo.py` (builds `demo/` from `reports/`), then `python run.py --period 2026-08`

@@ -1,6 +1,6 @@
-38b0717d4f702817741f23ff15581240  CLAUDE.md
-ecf9507237e66fd1323f66e16c5b853c  EXPERIMENT_crop_test.md
-e6f01a13377b0364bc00b1f4cac17bbb  HANDOVER.md
+3b255712b330fb5e6c6de8652a9bbc3d  CLAUDE.md
+c1bd79d7d1196c92afec1d17eea052a0  EXPERIMENT_crop_test.md
+68d7cf0513744a4004838ea72fda0755  HANDOVER.md
 1431e36c4b2087e68211584bf4e43661  config/defaults.yaml
 db714e71ddc2443471f8099dfe1e14f2  config/trustees/_template.yaml
 7af3e03fe3d20271339259b4fe2baaeb  config/trustees/bny_mellon_a.yaml
@@ -18,10 +18,11 @@ d41d8cd98f00b204e9800998ecf8427e  src/wit/__init__.py
 262603a9b83c28fa06ed62f554537720  src/wit/collateral.py
 fee5a49fd8d2a7a362838f2ef4d61b74  src/wit/config.py
 c8d5a75edf2eb6e48a00c902b44f8bd2  src/wit/crops.py
-32bdf9174acddc6807fb38ba523c4396  src/wit/geometry.py
+ea53da0ed67f7e888c1c47a153cd8cb0  src/wit/croptable.py
+0efca8f0000086e757680af37a06357e  src/wit/geometry.py
 e71be3e958f57d78eedc2a042f5b2017  src/wit/pages.py
 54c090e0bc323dbfd1dc9941fb8226d7  src/wit/pdfpage.py
 c25560da2bbf00ad07ca9bbba1c008bb  src/wit/performance.py
 34f54ace3a80c31b869345811248a433  src/wit/run.py
 9b48e808242123f5705bfdbc45f13ba8  src/wit/sources.py
-bdbbf52b7fa0af3df88db2f877160d13  tools/crop_test.py
+085cf24d0e831636e960a6077b3e86c2  tools/crop_test.py

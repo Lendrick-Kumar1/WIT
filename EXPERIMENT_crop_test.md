@@ -70,3 +70,21 @@ Send back:
 | Crops fix most XLarge failures | Fallback = PyMuPDF, then XLarge on crops, then flag. No new model. |
 | A specific pattern still fails on crops | That pattern gets a PyMuPDF rule (e.g. grouped tables), or a second model as last resort for that pattern only |
 | PyMuPDF already correct where XLarge fails | Confirms PyMuPDF as first pass; XLarge only behind checks |
+
+## Result (4 problem PDFs, 39 crops)
+| | XLarge, full page | XLarge, crop | PyMuPDF, one table per crop |
+|---|---|---|---|
+| Dashboards / bands | collapsed into 1 table (3 of 4 pages) | right, except small boxes | right |
+| Key-value boxes, 1-row tables | partly | **not found (8 crops)** | right |
+| Grouped (sparse) tables | right columns, no copy-down | right columns, no copy-down | right columns **+ copy-down + subtotals checked** |
+| Time | 13-105 s / page | 3-16 s / crop | **~0.02 s / crop** |
+
+Decision: PyMuPDF on crops is the main path; XLarge only for crops whose checks fail.
+
+## Run (after v3_7)
+```bash
+poetry run python tools/crop_test.py probs/*.pdf --no-docling      # PyMuPDF only (default engine = one table per crop)
+poetry run python tools/crop_test.py probs/*.pdf --engine old --no-docling   # the previous behaviour, to compare
+poetry run python tools/crop_test.py probs/*.pdf --no-full         # XLarge on crops only (skips the slow full pages)
+```
+`summary.xlsx` now has a **checks** column ("3 ok, 1 check"). Each table has `_row` and `_check`.

@@ -28,6 +28,7 @@ import pymupdf
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from wit import geometry as G                          # noqa: E402
 from wit.crops import find_crops, preview_png, write_crop_pdf  # noqa: E402
+from wit.croptable import read_crop                    # noqa: E402
 from wit.pdfpage import page_model                     # noqa: E402
 
 
@@ -62,8 +63,13 @@ def docling_tables(conv, pdf, page_no=None):
 
 
 # ----------------------------------------------------------------------------- PyMuPDF engine
-def pymupdf_tables(page):
+def pymupdf_tables(page, engine="crop"):
+    """engine='crop' (default): the whole crop is ONE table (croptable.read_crop: grouped rows,
+    subtotals, checks). engine='old': the previous behaviour (re-segment the crop with xy_cut)."""
     t0 = time.time()
+    if engine == "crop":
+        df = read_crop(page)
+        return ([df] if df is not None else []), time.time() - t0
     words, H, V = page_model(page)
     dfs = []
     if len(words) >= 3:
@@ -73,6 +79,15 @@ def pymupdf_tables(page):
             if r.df is not None and len(r.df) and r.df.shape[1] >= 2:
                 dfs.append(r.df)
     return dfs, time.time() - t0
+
+
+def check_flags(dfs):
+    """'' if nothing to check, else e.g. '3 ok, 1 check' (from croptable's _check column)."""
+    vals = [v for df in dfs if "_check" in df for v in df["_check"] if v]
+    if not vals:
+        return ""
+    ok = sum(v == "ok" for v in vals)
+    return f"{ok} ok" + (f", {len(vals) - ok} check" if len(vals) > ok else "")
 
 
 def peak_ram_mb():
@@ -90,6 +105,9 @@ def main():
     ap.add_argument("--no-docling", action="store_true", help="skip Docling (crops + PyMuPDF only)")
     ap.add_argument("--artifacts", default=os.environ.get(
         "DOCLING_ARTIFACTS_PATH", str(Path.home() / ".cache" / "docling" / "models")))
+    ap.add_argument("--no-full", action="store_true", help="skip Docling on FULL pages (crops only)")
+    ap.add_argument("--engine", choices=["crop", "old"], default="crop",
+                    help="PyMuPDF: crop = whole crop is one table (default); old = re-segment it")
     ap.add_argument("--out", default="out/crop_test")
     a = ap.parse_args()
 
@@ -109,7 +127,7 @@ def main():
             doc[p - 1].get_pixmap(dpi=90).save(d / "page.png")
             sheets = {}
 
-            if conv:
+            if conv and not a.no_full:
                 dfs, sec = docling_tables(conv, pdf, p)
                 for i, df in enumerate(dfs, 1):
                     sheets[f"full_t{i}"] = df
@@ -122,12 +140,12 @@ def main():
                 write_crop_pdf(doc, p - 1, rect, cpdf)
                 preview_png(cpdf, d / f"crop{k}.png", dpi=110)
                 crop_page = pymupdf.open(cpdf)[0]
-                dfs, sec = pymupdf_tables(crop_page)
+                dfs, sec = pymupdf_tables(crop_page, a.engine)
                 for i, df in enumerate(dfs, 1):
                     sheets[f"c{k}_pymupdf_t{i}"] = df
                 rows.append(dict(pdf=Path(pdf).name, page=p, unit=f"crop{k}", engine="pymupdf",
                                  tables=len(dfs), shapes=" ".join(f"{x.shape[0]}x{x.shape[1]}" for x in dfs),
-                                 seconds=round(sec, 2), ram_mb=None,
+                                 seconds=round(sec, 2), ram_mb=None, checks=check_flags(dfs),
                                  crop_box=[round(v) for v in rect]))
                 if conv:
                     dfs, sec = docling_tables(conv, cpdf)

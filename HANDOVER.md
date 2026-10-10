@@ -77,6 +77,8 @@ WIT/
 │   ├── pages.py                  page selection by key terms
 │   ├── pdfpage.py                rotation fix, separators (lines AND images), rows, numbers
 │   ├── performance.py, balance.py, collateral.py, geometry.py
+│   ├── crops.py                  page -> one crop per table (section bars, vertical rules)
+│   ├── croptable.py              crop -> ONE table: grouped rows, subtotals, sum checks
 │   └── run.py                    orchestration, statuses, Excel outputs
 ├── demo/make_demo.py             builds an org-style demo tree from reports/
 └── out/<period>/<Deal>/{Balance,Performance,Collateral}.xlsx  +  out/<period>/_run_report.xlsx

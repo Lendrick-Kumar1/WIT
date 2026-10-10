@@ -343,7 +343,10 @@ def has_digit(ws):
     return any(ch.isdigit() for w in ws for ch in w["t"])
 
 
-def build_table(region: Region):
+def build_table(region: Region, data_row=None):
+    """data_row(ws) -> True if a text row is DATA (default: contains any digit). Rows above the
+    first data row are the header."""
+    is_data = data_row or has_digit
     msg = [r for r in group_rows(region.words)
            if " ".join(w["t"] for w in r["ws"]).lower().startswith("there are no")]
     ws = [w for w in region.words if not any(w in r["ws"] for r in msg)] or region.words
@@ -363,7 +366,7 @@ def build_table(region: Region):
     # Columns come from the DATA rows. Header words often sit closer together than the data
     # under them ("LoanX ID" | "Moody's Rating"), so letting the header block a gutter merges
     # two real columns. Header rows only ADD columns afterwards (empty-column rescue below).
-    n_hdr0 = next((i for i, r in enumerate(rows) if has_digit(r["ws"])), 0)
+    n_hdr0 = next((i for i, r in enumerate(rows) if is_data(r["ws"])), 0)
     hdr_rows0 = rows[:n_hdr0]
     body_rows = [r for r in grows if r not in hdr_rows0]
     if len(body_rows) >= 2 and hdr_rows0:
@@ -398,7 +401,23 @@ def build_table(region: Region):
         gut = new_gut
     else:
         gut = find_gutters(grows, x0, x1, min_w=lh * 0.55, tolerance=tol)
-    cuts = [x0 - 1] + [(a + b) / 2 for a, b in gut] + [x1 + 1]     # separator = gutter middle
+    # separator = middle of the widest INK-FREE stretch inside the gutter. A tolerant gutter can
+    # be wide because one long cell ("Banking, Finance, Insurance & Real Estate") pokes into it;
+    # its plain middle would then cut that cell in two.
+    def _sep(a, b):
+        spans = sorted((w["x0"], w["x1"]) for w in ws if w["x1"] > a and w["x0"] < b)
+        free, cur = [], a
+        for p, q in spans:
+            if p > cur:
+                free.append((cur, p))
+            cur = max(cur, q)
+        if cur < b:
+            free.append((cur, b))
+        if not free:
+            return (a + b) / 2
+        p, q = max(free, key=lambda t: t[1] - t[0])
+        return (p + q) / 2
+    cuts = [x0 - 1] + [_sep(a, b) for a, b in gut] + [x1 + 1]
     ncol = len(cuts) - 1
 
     def col_of(x):
@@ -412,7 +431,7 @@ def build_table(region: Region):
         return cells
 
     # 2) HEADER: the rows above the first row that contains a digit
-    n_hdr = next((i for i, r in enumerate(rows) if has_digit(r["ws"])), len(rows))
+    n_hdr = next((i for i, r in enumerate(rows) if is_data(r["ws"])), len(rows))
     if n_hdr == len(rows) and ncol < 3 and len(rows) > 2:
         n_hdr = 0          # digit-free block with 1-2 columns = plain text, not a header
     header = [""] * ncol
@@ -548,11 +567,17 @@ def build_table(region: Region):
         header[0] = header[0].replace(sec, "").strip()
         body.insert(0, [sec] + [""] * (ncol - 1))
     #    rows with only column 0 filled and no digits -> become a "_section" column
-    table, section = [], ""
+    table, section, group = [], "", ""
+    norm = lambda t: " ".join(t.split()).lower()
     for cells in body:
         if cells[0] and not any(cells[1:]) and not any(ch.isdigit() for ch in cells[0]):
+            if group and norm(cells[0]) == norm(group):
+                table.append(cells + [section])    # "Automotive" again = label of its subtotal
+                continue
             section = cells[0]
             continue
+        if cells[0] and any(cells[1:]):
+            group = cells[0]
         table.append(cells + [section])
 
     cols = [h or f"col{k}" for k, h in enumerate(header)] + ["_section"]
