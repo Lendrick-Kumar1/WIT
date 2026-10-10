@@ -1,4 +1,4 @@
-# BNY Mellon, layout B (e.g. Providus II): whitespace-only tables, landscape A4.
+# BNY Mellon, layout B: whitespace-only tables, landscape A4.
 names: "BNY|Bank of New York"          # matches the Trustee column of the deal list
 detect:
   any: ["bny ?mellon|bnymellon", "Investor Report", "Notes and Asset Summary Information"]

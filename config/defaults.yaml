@@ -5,9 +5,7 @@
 asset_class: CLO
 
 layout:
-  title_band: 0.2        # top share of the page that holds the section title
-  footer_band: 0.93      # bottom share treated as footer (ignored for tables)
-  table_top: 0.1         # collateral tables: ignore text above this share of the page (logo/title)
+  title_band: 0.2        # top share of the page searched for the section title (page selection)
 
 # Which pages feed which output. Empty list = scan every page (~30 ms/page).
 # Put your legacy key terms here, or override per trustee.
@@ -17,7 +15,7 @@ pages:
   balance: []
   collateral: []
 
-deal:
+deal:                    # only for ad-hoc runs (python run.py some.pdf); with --period these come from the deal list
   deal_name: "\\bCLO\\b"
   deal_name_stop: "\\s+(?:Monthly|As of|LEI)\\b"
   report_month: "as of(?: date)?\\s*:?\\s*([0-9]{1,2}[/-][0-9A-Za-z]{1,3}[/-][0-9]{2,4}|[A-Z][a-z]+ \\d{1,2}, \\d{4})"
@@ -48,7 +46,6 @@ balance:
     ccc balance:       ["<<PLACEHOLDER>>"]
 
 collateral:
-  reader: crops          # crops = one table per crop, stitched across pages (default) | regions = older reader
   min_mapped_fields: 3
   id_patterns: ["LX\\d{6}", "[A-Z]{2}[A-Z0-9]{9}\\d", "BBG[A-Z0-9]{9}", "[A-Z0-9]{9}"]   # LoanX, ISIN, FIGI, CUSIP
   # header text -> schema column. ORDER MATTERS: specific patterns before generic ones.

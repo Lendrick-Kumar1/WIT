@@ -1,4 +1,4 @@
-# U.S. Bank, layout A (e.g. Anchorage, Segovia): Executive Summary dashboard, pages stored /Rotate 90,
+# U.S. Bank, layout A: Executive Summary dashboard, pages stored /Rotate 90,
 # band separators are gradient IMAGES (handled generically by pdfpage.page_model).
 names: "U\\.?S\\.? ?Bank"          # matches the Trustee column of the deal list
 detect:

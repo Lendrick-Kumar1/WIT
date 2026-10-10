@@ -1,50 +1,47 @@
 """Balance: label -> value, with explicit rules and an explicit status. Never a silent guess.
 
-For every label match (the label must be its own phrase on the line, see config regexes):
-  1. RIGHT : the run of numbers immediately to the right of the label on the same line,
-             stopping at the next text or a vertical rule.
-             - exactly 1 number                  -> taken
-             - several numbers (Current | Prior) -> the one under the header matching the
-                                                    field's `column` regex; otherwise the
-                                                    first one, flagged 'ambiguous'
-  2. BELOW : if nothing is to the right, a number directly under the label (next line,
-             horizontally overlapping it). This handles stacked label-over-value layouts.
-Across pages, candidates are kept in page order (the order of `pages.balance`).
+Three forms per field (config `balance.labels`):
+  [regex, ...]                       label lookup
+  {labels: [...], column: regex}     label lookup; with several numbers, take the one under `column`
+  {page: regex, column: regex}       TOTAL of a column on the page(s) titled `page` (table_total)
+
+Label lookup, for every phrase on a page that matches a label:
+  1. RIGHT : the run of numbers immediately right of the label on the same line, stopping at the
+             next text or a vertical rule. One number -> taken. Several (Current | Prior) -> the one
+             under the header matching `column`, else the first one, flagged 'ambiguous'.
+  2. BELOW : nothing to the right -> exactly one number directly under the label.
 Status per field: ok | ambiguous | conflict (same label, different values) | missing.
+Across pages the first match in `pages.balance` order wins.
 """
 import re
 import statistics as st
 
+from .crops import page_tables
+from .pages import page_texts
 from .pdfpage import page_model, phrases, rows_of, to_num
-
-FIELDS = {}
-
-
-TABLE_FIELDS = {}
+from .totals import amount, mark_totals
 
 
-def configure(cfg):
-    """cfg['balance']['labels'][field] =
-         list of regexes                         -> label lookup
-         {labels: [...], column: regex}          -> label lookup, pick the number under `column`
-         {page: regex, column: regex}            -> TOTAL of a column on a given page (table_total)"""
-    global FIELDS, TABLE_FIELDS
-    FIELDS, TABLE_FIELDS = {}, {}
+def fields(cfg):
+    """-> (label fields {field: {labels, column}}, table fields {field: {page, column}})"""
+    label_fields, table_fields = {}, {}
     for field, spec in cfg["balance"]["labels"].items():
         if isinstance(spec, dict) and spec.get("page"):
-            TABLE_FIELDS[field] = spec
+            table_fields[field] = spec
         elif isinstance(spec, dict):
-            FIELDS[field] = dict(labels=spec.get("labels", []), column=spec.get("column"))
+            label_fields[field] = dict(labels=spec.get("labels", []), column=spec.get("column"))
         else:
-            FIELDS[field] = dict(labels=spec, column=None)
+            label_fields[field] = dict(labels=spec, column=None)
+    return label_fields, table_fields
 
 
 def _is_num(t):
     return to_num(t) is not None
 
 
-def candidates(page):
+def candidates(page, cfg):
     """All (field, value, how, label, page) candidates on one page."""
+    label_fields, _ = fields(cfg)
     words, _, V = page_model(page)
     if not words:
         return []
@@ -57,7 +54,7 @@ def candidates(page):
             label = p["t"].strip()
             if _is_num(label):
                 continue
-            for field, spec in FIELDS.items():
+            for field, spec in label_fields.items():
                 if not any(re.search(pt, label, re.I) for pt in spec["labels"]):
                     continue
                 # 1) RIGHT: contiguous numbers right of the label, until text or a vertical rule
@@ -98,46 +95,31 @@ def candidates(page):
 def table_total(doc, cfg, spec):
     """Total of one column on the page(s) whose title matches spec['page'].
 
-    value  = the printed total under that column if there is one, else the sum of the rows.
+    value  = the printed total under that column if there is one, else the sum of the rows
     status = ok             printed total == sum of rows (or only one of them exists)
-             conflict       printed total != sum of rows (printed total is used)
-             ok (no rows)   page exists but has no rows (e.g. "There are no ...") -> 0
-             missing        no page with that title in the report
-    """
-    from .collateral import page_tables
-    from .pages import page_texts
-
+             conflict       printed total != sum of rows (the printed total is used)
+             ok (no rows)   the page exists but has no rows ("There are no ...") -> 0
+             missing        no page with that title in the report"""
     titles = page_texts(doc, cfg.get("layout", {}).get("title_band", 0.2))
     pages = [i for i, t in enumerate(titles) if re.search(spec["page"], t["title"], re.I)]
     if not pages:
         return dict(value=None, status="missing", how="table", label=spec["page"], page=None, n=0)
     rows_sum, n_rows, printed = 0.0, 0, None
     for i in pages:
-        for df in page_tables(doc[i], cfg):
-            cols = [c for c in df.columns if re.search(spec["column"], str(c), re.I)]
+        for _, raw in page_tables(doc[i]):
+            cols = [c for c in raw.columns if re.search(spec["column"], str(c), re.I)]
             if not cols:
                 continue
-            vals = [to_num(str(v)) for v in df[cols[0]] if str(v).strip()]
-            vals = [v for v in vals if v is not None]
-            rows_sum += sum(vals)
-            n_rows += len(vals)
-        # printed total: a line holding only numbers, with one number in the SAME x-position as the
-        # column's own values (located by matching the values' text on the page)
-        words, _, _ = page_model(doc[i])
-        col_vals = set()
-        for df in page_tables(doc[i], cfg):
-            cols = [c for c in df.columns if re.search(spec["column"], str(c), re.I)]
-            if cols:
-                col_vals |= {str(v).strip() for v in df[cols[0]] if str(v).strip()}
-        xs = [(w["x0"] + w["x1"]) / 2 for w in words if w["t"] in col_vals]
-        if xs:
-            col_x = sum(xs) / len(xs)
-            for r in rows_of(words):
-                if len(r["ws"]) >= 1 and all(to_num(w["t"]) is not None for w in r["ws"]) \
-                        and not any(w["t"] in col_vals and len(r["ws"]) > 1 and False for w in r["ws"]):
-                    near = [w for w in r["ws"] if abs((w["x0"] + w["x1"]) / 2 - col_x) < 25]
-                    if near and r["ws"][0]["x0"] > min(w["x0"] for w in words if w["t"] in col_vals) - 5:
-                        printed = to_num(near[0]["t"])
+            marked = mark_totals(raw)
+            for kind, v in zip(marked.get("_row", ["detail"] * len(marked)), marked[cols[0]]):
+                x = amount(v)
+                if x is None:
+                    continue
+                if kind == "detail":
+                    rows_sum += x
+                    n_rows += 1
+                else:
+                    printed = x
     page_no = pages[0] + 1
     if n_rows == 0 and printed is None:
         return dict(value=0.0, status="ok (no rows)", how="table", label=spec["page"], page=page_no, n=0)
@@ -145,14 +127,15 @@ def table_total(doc, cfg, spec):
         return dict(value=printed, status="conflict", how="table: printed total vs sum",
                     label=spec["page"], page=page_no, n=n_rows)
     value = printed if printed is not None else round(rows_sum, 2)
-    how = "table: printed total" + (" = sum of rows" if n_rows else "") if printed is not None else "table: sum of rows"
+    how = ("table: printed total" + (" = sum of rows" if n_rows else "")) if printed is not None \
+        else "table: sum of rows"
     return dict(value=value, status="ok", how=how, label=spec["page"], page=page_no, n=n_rows)
 
 
-def resolve(cands):
-    """Pick one value per field and say how sure we are."""
+def resolve(cands, cfg):
+    """Pick one value per label field and say how sure we are."""
     result = {}
-    for field in FIELDS:
+    for field in fields(cfg)[0]:
         cs = [c for c in cands if c[0] == field]
         if not cs:
             result[field] = dict(value=None, status="missing", how="", label="", page=None, n=0)
@@ -164,9 +147,3 @@ def resolve(cands):
         result[field] = dict(value=first[1], status=status, how=first[2], label=first[3],
                              page=first[4], n=len(cs))
     return result
-
-
-def balance(page):
-    """Back-compat helper for --debug: field -> (value, page, label)."""
-    return {f: (r["value"], r["page"], r["label"]) for f, r in resolve(candidates(page)).items()
-            if r["status"] != "missing"}

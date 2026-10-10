@@ -1,4 +1,4 @@
-# BNY Mellon, layout A (e.g. Capital Four, Providus VII): serif headings, zebra rows.
+# BNY Mellon, layout A: serif headings, zebra rows, Loan / Bond / Equity sections with subtotals.
 names: "BNY|Bank of New York"          # matches the Trustee column of the deal list
 detect:
   any: ["bny ?mellon|bnymellon", "Client Service Manager", "Compliance Summary"]

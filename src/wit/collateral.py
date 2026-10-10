@@ -1,28 +1,33 @@
-"""Collateral: issuer-level rows joined from several long tables.
+"""Collateral: one row per security, joined from several long tables (assets, ratings, ...).
 
-  1. every collateral page is cut into CROPS (one table each, crops.py) and each crop is read as
-     ONE table (croptable.py). collateral.reader: regions = the older page-wide reader.
-  2. the same table continuing over consecutive pages is STITCHED into one table first, so groups
-     and totals that cross a page break are copied down / checked correctly
-  3. map every table's column headers to schema columns via synonyms (config collateral.columns)
-  4. keep tables that have an ID column; join the different table types on the security ID
-  5. every subtotal / total is checked against the sum of its rows -> returned as `checks`
-  6. optional: a crop that fails its checks is re-read by XLarge (fallback.py); XLarge's table is
-     used only if it passes the checks that PyMuPDF's failed
+  1. every collateral page is cut into crops, each read as one table          (crops.page_tables)
+  2. a table running over a page break is joined into one table             (totals.stitch_pages)
+  3. subtotals / totals are checked against their rows, groups copied down   (totals.mark_totals)
+  4. column headers are mapped to the output schema via synonyms             (config collateral.columns)
+  5. tables with an ID column are joined on the security ID:
+       - rows come from the table with the most distinct securities
+       - each column comes from the table whose header names it most directly
+  6. optional (--fallback): a crop whose IDs or sums fail is re-read by XLarge (fallback.py);
+     XLarge's table is used only if it passes where PyMuPDF's failed
+
+collateral() returns (rows, checks, fallback_events); run.py writes checks to _run_report.xlsx.
 """
 import re
 
 import pandas as pd
 
-from . import geometry as G
-from .croptable import group_rows, page_crop_tables
-from .pdfpage import page_model, to_num
+from .crops import page_tables
+from .pdfpage import to_num
+from .totals import mark_totals, stitch_pages
 
 ID_FIELD = "loan id"
 
 
-def _alternatives(pat):
-    """top-level '|' alternatives of a synonym regex, in config order (specific first)"""
+# ---------------------------------------------------------------------------------------------
+# header -> schema field
+# ---------------------------------------------------------------------------------------------
+def _synonyms(pat):
+    """Top-level '|' alternatives of a synonym regex, in config order (specific first)."""
     out, depth, cur = [], 0, ""
     for ch in pat:
         depth += ch == "("
@@ -35,72 +40,60 @@ def _alternatives(pat):
     return out + [cur]
 
 
+def _is_field_name(header, field):
+    return re.sub(r"[^a-z0-9&']+", " ", header.lower()).strip() == field
+
+
 def header_rank(header, field, columns_cfg):
-    """How directly a header names a field: 0 = it IS the field name, then the position of the
-    first synonym it matches ('Issuer Name' -> issuer 0+1, 'Description' -> issuer 3+1)."""
-    hl = header.lower()
-    if re.sub(r"[^a-z0-9&']+", " ", hl).strip() == field:
+    """How directly a header names a field: 0 = it IS the field name, else 1 + the position of the
+    first synonym it matches ('Issuer Name' -> 1, 'Description' -> 4 for the issuer field)."""
+    if _is_field_name(header, field):
         return 0
-    pat = columns_cfg.get(field) or ""
-    return 1 + next((k for k, alt in enumerate(_alternatives(pat)) if alt and re.search(alt, hl)), 98)
+    hl = header.lower()
+    return 1 + next((k for k, alt in enumerate(_synonyms(columns_cfg.get(field) or ""))
+                     if alt and re.search(alt, hl)), 98)
 
 
 def map_headers(headers, columns_cfg):
-    """headers (list[str]) -> {header: schema_field}. Each header goes to the first field whose
-    synonyms match it (field order matters). If several headers want the same field, a header that
-    is literally the field's name wins ('Principal Balance' beats 'Par/Quantity'), else the first."""
-    best = {}                                      # field -> (alternative index, header position, header)
+    """{header: field}. Each header goes to the first field whose synonyms match it (config order
+    matters). If several headers want the same field, a header that IS the field's name wins
+    ('Principal Balance' over 'Par/Quantity'); otherwise the first one."""
+    best = {}                                      # field -> (rank, position, header)
     for pos, h in enumerate(headers):
-        hl = h.lower()
         for field, pat in columns_cfg.items():
-            if not pat or not re.search(pat, hl):
+            if not pat or not re.search(pat, h.lower()):
                 continue
-            # a header that IS the field's name ("Principal Balance") beats one that only matches a
-            # synonym ("Par/Quantity"); otherwise the first header wins, as before
-            rank = 0 if re.sub(r"[^a-z0-9&']+", " ", hl).strip() == field else 1
+            rank = 0 if _is_field_name(h, field) else 1
             if field not in best or (rank, pos) < best[field][:2]:
                 best[field] = (rank, pos, h)
             break
     return {h: f for f, (_, pos, h) in sorted(best.items(), key=lambda kv: kv[1][1])}
 
 
-def page_tables(page, cfg):
-    G.HEADER_VOCAB = [v for v in cfg.get("collateral", {}).get("columns", {}).values() if v] + \
-        [v for v in cfg.get("performance", {}).get("header_roles", {}).values() if v]
-    lay = cfg.get("layout", {})
-    words, H, V = page_model(page)
-    h = page.rect.height
-    words = [w for w in words if w["y0"] > h * lay.get("table_top", 0.1)
-             and w["y1"] < h * lay.get("footer_band", 0.93)]
-    if len(words) < 10:
-        return []
-    out = []
-    for blk in G.attach_headers(G.xy_cut(words, H, V)):
-        r = G.Region(page=page.number + 1, words=blk, bbox=G.bbox(blk))
-        G.build_table(r)
-        if r.df is not None and len(r.df) and r.df.shape[1] >= 3:
-            out.append(r.df)
-    return out
-
-
-ID_PATTERNS = [r"LX\d{6}", r"[A-Z]{2}[A-Z0-9]{9}\d", r"BBG[A-Z0-9]{9}", r"[A-Z0-9]{9}"]
-
-
-def norm_id(v, patterns=None):
-    """Pick the token that LOOKS like a security ID (LoanX, ISIN, FIGI, CUSIP), so text that
-    overflowed from a neighbouring column ('NEW B2D LX218697') doesn't pollute the key."""
+def norm_id(v, patterns):
+    """The token that LOOKS like a security ID (patterns from config: LoanX, ISIN, FIGI, CUSIP),
+    so text that overflowed from a neighbouring column doesn't pollute the key."""
     s = str(v or "").upper()
     toks = re.findall(r"[A-Z0-9]+", s)
-    for pat in patterns or ID_PATTERNS:
+    for pat in patterns:
         for tok in toks:
             if re.fullmatch(pat, tok):
                 return tok
     s = re.sub(r"\s+", "", s)
-    return s if re.fullmatch(r"[A-Z0-9]{6,14}", s) else ""
+    return s if re.fullmatch(r"[A-Z0-9]{6,14}", s) and re.search(r"\d", s) else ""   # IDs carry digits
+
+
+# ---------------------------------------------------------------------------------------------
+# reading the pages
+# ---------------------------------------------------------------------------------------------
+def header_vocab(cfg):
+    """Known header names (regexes), used to split two header names that touch."""
+    return [v for v in cfg["collateral"]["columns"].values() if v] + \
+        [v for v in cfg.get("performance", {}).get("header_roles", {}).values() if v]
 
 
 def _id_share(df, cfg):
-    """(has an ID column, share of detail rows with a valid ID) for one table."""
+    """(has an ID column, share of detail rows with a valid ID)."""
     m = map_headers([str(c) for c in df.columns if not str(c).startswith("_")], cfg["collateral"]["columns"])
     id_cols = [h for h, f in m.items() if f == ID_FIELD]
     if not id_cols:
@@ -108,35 +101,33 @@ def _id_share(df, cfg):
     det = df[df["_row"] == "detail"] if "_row" in df else df
     if not len(det):
         return True, 0.0
-    pats = cfg["collateral"].get("id_patterns")
-    ok = sum(bool(norm_id(v, pats)) for v in det[id_cols[0]])
-    return True, ok / len(det)
+    pats = cfg["collateral"]["id_patterns"]
+    return True, sum(bool(norm_id(v, pats)) for v in det[id_cols[0]]) / len(det)
 
 
-def _bad_checks(g):
-    """checks that point at a READING problem (not 'rows are on an earlier page')"""
-    if "_check" not in g:
+def _failed_sums(marked):
+    """Checks that point at a READING problem (not 'rows are on an earlier page')."""
+    if "_check" not in marked:
         return []
-    return [c for c in g["_check"] if c.startswith("check:") and "earlier page" not in c]
+    return [c for c in marked["_check"] if c.startswith("check:") and "earlier page" not in c]
 
 
-def _crop_raw_tables(doc, page_idx, cfg, xl=None, events=None):
-    """[(page_index, raw_df)] for every crop of the collateral pages; optional XLarge fallback."""
-    G.HEADER_VOCAB = [v for v in cfg["collateral"]["columns"].values() if v] + \
-        [v for v in cfg.get("performance", {}).get("header_roles", {}).values() if v]
-    footer = cfg.get("collateral", {}).get("footer_band")     # None = measured on each page
+def read_pages(doc, page_idx, cfg, xl=None, events=None):
+    """[(page_index, table)] for every crop of the given pages, in reading order.
+    With xl (fallback.XLarge): crops whose IDs (< 50% of rows) or sums fail are re-read."""
+    vocab = header_vocab(cfg)
     out = []
     for i in page_idx:
-        for rect, raw in page_crop_tables(doc[i], footer_band=footer, min_words=10):
+        for rect, raw in page_tables(doc[i], vocab, min_words=10):
             if raw.shape[1] < 3:
                 continue
             if xl is not None:
-                g = group_rows(raw)
-                has_id, share = _id_share(g, cfg)
-                why = ("IDs on only %d%% of rows" % round(100 * share)) if has_id and share < 0.5 else \
-                      ("; ".join(_bad_checks(g))[:120] if _bad_checks(g) else "")
+                marked = mark_totals(raw)
+                has_id, share = _id_share(marked, cfg)
+                why = (f"IDs on only {round(100 * share)}% of rows" if has_id and share < 0.5
+                       else "; ".join(_failed_sums(marked))[:120])
                 if why:
-                    raw, used = _try_xlarge(xl, doc, i, rect, raw, g, has_id, share, cfg)
+                    raw, used = _try_xlarge(xl, doc, i, rect, raw, marked, has_id, share, cfg)
                     if events is not None:
                         events.append(dict(page=i + 1, crop=[round(v) for v in rect], reason=why,
                                            result="XLarge used" if used else "XLarge not better, PyMuPDF kept"))
@@ -144,127 +135,93 @@ def _crop_raw_tables(doc, page_idx, cfg, xl=None, events=None):
     return out
 
 
-def _try_xlarge(xl, doc, i, rect, raw, g, has_id, share, cfg):
+def _try_xlarge(xl, doc, i, rect, raw, marked, has_id, share, cfg):
+    """XLarge's table replaces PyMuPDF's only if it has more valid IDs, or passes the sums
+    PyMuPDF failed (without losing IDs or columns)."""
     try:
         dfs = xl.tables(doc, i, rect)
     except Exception as e:                       # model missing etc.: keep PyMuPDF, say why
         print(f"  XLarge fallback failed on page {i + 1}: {e}")
         return raw, False
     for df in dfs:
-        g2 = group_rows(df)
-        has2, share2 = _id_share(g2, cfg)
+        m2 = mark_totals(df)
+        has2, share2 = _id_share(m2, cfg)
         better_ids = has_id and has2 and share2 >= 0.5 and share2 > share
-        fixed_checks = bool(_bad_checks(g)) and not _bad_checks(g2) and \
-            g2.shape[1] >= g.shape[1] - 1 and (not has_id or (has2 and share2 >= share))
-        if better_ids or fixed_checks:
+        fixed_sums = bool(_failed_sums(marked)) and not _failed_sums(m2) and \
+            m2.shape[1] >= marked.shape[1] - 1 and (not has_id or (has2 and share2 >= share))
+        if better_ids or fixed_sums:
             return df, True
     return raw, False
 
 
-def _stitch(parts):
-    """Join raw tables that run over a page break into one table. `parts` = [(page_index, df)] in
-    reading order. A table continues on the next page only if it is the LAST table on its page,
-    the next part is the FIRST table on the following page, and both have the same columns.
-    Returns [(pages, df)] in reading order."""
-    first, last = {}, {}
-    for k, (i, _) in enumerate(parts):
-        first.setdefault(i, k)
-        last[i] = k
-    out = []
-    for k, (i, raw) in enumerate(parts):
-        sig = tuple(c for c in raw.columns if not str(c).startswith("_"))
-        if out:
-            pages, dfs, psig, pk = out[-1]
-            if psig == sig and i == pages[-1] + 1 and pk == last[pages[-1]] and k == first[i]:
-                out[-1] = (pages + [i], dfs + [raw], sig, k)
-                continue
-        out.append(([i], [raw], sig, k))
-    res = []
-    for p, dfs, _, _ in out:
-        # a section ("Loan", "Bond") carries over the page break: the leading rows of a continued
-        # page that have no section yet belong to the previous page's last section
-        sec = ""
-        for k, d in enumerate(dfs):
-            if "_section" not in d and not sec:
-                continue
-            d = d.copy()
-            col = d["_section"].fillna("").astype(str) if "_section" in d else pd.Series("", index=d.index)
-            if sec:
-                lead = col.eq("").cumprod().astype(bool)     # rows before the page's first label
-                col[lead] = sec
-            d["_section"] = col
-            dfs[k] = d
-            if col.str.strip().any():
-                sec = col[col.str.strip() != ""].iloc[-1]
-        res.append((p, pd.concat(dfs, ignore_index=True).fillna("").astype(str)))
-    return res
-
-
+# ---------------------------------------------------------------------------------------------
+# the whole thing
+# ---------------------------------------------------------------------------------------------
 def collateral(doc, page_idx, cfg, deal="", month="", xl=None):
-    """-> (collateral DataFrame, checks DataFrame, fallback events list)"""
-    cols_cfg = cfg["collateral"]["columns"]
-    min_fields = cfg["collateral"].get("min_mapped_fields", 3)
-    pats = cfg["collateral"].get("id_patterns")
-    groups = {}                                   # frozenset(fields) -> list of DataFrames
-    checks, events = [], []
-    if cfg["collateral"].get("reader", "crops") == "regions":
-        tables = [(str(i + 1), df) for i in page_idx for df in page_tables(doc[i], cfg)]
-    else:
-        tables = []
-        for pages, df in _stitch(_crop_raw_tables(doc, page_idx, cfg, xl, events)):
-            g = group_rows(df)
-            heads = [c for c in g.columns if not str(c).startswith("_")]
-            for _, r in g[g["_row"] != "detail"].iterrows():
-                label = next((r[c] for c in heads if r[c].strip() and G.to_number(r[c]) is None), "")
-                checks.append(dict(pages=f"{pages[0] + 1}-{pages[-1] + 1}" if len(pages) > 1 else str(pages[0] + 1),
-                                   table=" | ".join(heads[:3])[:80], row=r["_row"], label=label[:60],
-                                   check=r["_check"] or "not checked (amount in another column)"))
-            det = g[g["_row"] == "detail"]
-            for page, part in det.groupby("_page", sort=False):
-                tables.append((page, part.drop(columns=[c for c in part.columns if str(c).startswith("_")])))
+    """-> (collateral rows, checks, fallback events)"""
+    ccfg = cfg["collateral"]
+    checks, events, tables = [], [], []
+    for pages, df in stitch_pages(read_pages(doc, page_idx, cfg, xl, events)):
+        marked = mark_totals(df)
+        heads = [c for c in marked.columns if not str(c).startswith("_")]
+        span = f"{pages[0] + 1}-{pages[-1] + 1}" if len(pages) > 1 else str(pages[0] + 1)
+        for _, r in marked[marked["_row"] != "detail"].iterrows():
+            label = next((r[c] for c in heads if r[c].strip() and to_num(r[c]) is None), "")
+            checks.append(dict(pages=span, table=" | ".join(heads[:3])[:80], row=r["_row"],
+                               label=label[:60], check=r["_check"] or "not checked (amount in another column)"))
+        det = marked[marked["_row"] == "detail"]
+        for page, part in det.groupby("_page", sort=False):
+            tables.append((page, part.drop(columns=[c for c in part.columns if str(c).startswith("_")])))
+    checks = pd.DataFrame(checks, columns=["pages", "table", "row", "label", "check"])
+    rows = join_on_id(tables, cfg)
+    if rows is None:
+        return pd.DataFrame(columns=ccfg["output_columns"]), checks, events
+    rows["deal name"], rows["report_month"] = deal, month
+    return rows.reindex(columns=ccfg["output_columns"] + ["_pages"]), checks, events
+
+
+def join_on_id(tables, cfg):
+    """[(page, table)] -> one row per security ID, or None if no table has an ID column."""
+    ccfg = cfg["collateral"]
+    cols_cfg = ccfg["columns"]
+    groups = {}                                    # set of mapped fields -> parts
     for page, df in tables:
         m = map_headers([str(c) for c in df.columns], cols_cfg)
-        if ID_FIELD not in m.values() or len(m) < min_fields:
+        if ID_FIELD not in m.values() or len(m) < ccfg.get("min_mapped_fields", 3):
             continue
-        ranks = {f: header_rank(h, f, cols_cfg) for h, f in m.items()}
         part = df[list(m)].rename(columns=m).copy()
-        part[ID_FIELD] = part[ID_FIELD].map(lambda v: norm_id(v, pats))
+        part[ID_FIELD] = part[ID_FIELD].map(lambda v: norm_id(v, ccfg["id_patterns"]))
         part = part[part[ID_FIELD] != ""]
         if len(part):
-            part = part.mask(part.astype(str).apply(lambda c: c.str.strip()) == "")   # '' = missing
+            part = part.mask(part.astype(str).apply(lambda c: c.str.strip()) == "")    # '' = missing
             part["_pages"] = str(page)
-            part.attrs["ranks"] = ranks
+            part.attrs["ranks"] = {f: header_rank(h, f, cols_cfg) for h, f in m.items()}
             groups.setdefault(frozenset(m.values()), []).append(part)
-    checks = pd.DataFrame(checks, columns=["pages", "table", "row", "label", "check"])
     if not groups:
-        return pd.DataFrame(columns=cfg["collateral"]["output_columns"]), checks, events
-    tables = []
-    for v in groups.values():
-        t = pd.concat(v, ignore_index=True)
-        t.attrs["ranks"] = {f: min(p.attrs["ranks"].get(f, 99) for p in v) for f in t.columns
-                            if not str(f).startswith("_")}
-        tables.append(t)
-    # rows: the table with an issuer column and the most DISTINCT securities (then most columns).
-    # Counting rows instead would favour tables that list one security in several lots
-    # (interest accrual: 445,979.01 + 863,180.89) over the asset table's single 1,309,159.90.
-    tables.sort(key=lambda t: ("issuer" in t.columns, t[ID_FIELD].nunique(), t.shape[1]), reverse=True)
-    keyed = [t.drop_duplicates(subset=[ID_FIELD], keep="first").set_index(ID_FIELD) for t in tables]
+        return None
+    stacked = []
+    for parts in groups.values():
+        t = pd.concat(parts, ignore_index=True)
+        t.attrs["ranks"] = {f: min(p.attrs["ranks"].get(f, 99) for p in parts)
+                            for f in t.columns if not str(f).startswith("_")}
+        stacked.append(t)
+    # rows: the table with an issuer column and the most DISTINCT securities; on a tie, the table
+    # that lists each security ONCE (a table that splits a security into lots - interest accrual -
+    # has no single value per security), then the one with most columns
+    stacked.sort(key=lambda t: ("issuer" in t.columns, t[ID_FIELD].nunique(),
+                                -t[ID_FIELD].duplicated().sum(), t.shape[1]), reverse=True)
+    keyed = [t.drop_duplicates(subset=[ID_FIELD], keep="first").set_index(ID_FIELD) for t in stacked]
     base = keyed[0][[]].copy()
-    # each column from the table whose header names it most directly ('Issuer' before
-    # 'Description', 'Principal Balance' before 'Par/Quantity'); gaps filled from the next one
-    fields = [c for c in cfg["collateral"]["output_columns"] + ["_pages"]
-              if any(c in k.columns for k in keyed)]
-    for f in fields:
-        order = sorted(range(len(keyed)), key=lambda i: (tables[i].attrs["ranks"].get(f, 99), i))
+    # each column from the table whose header names it most directly; gaps from the next one
+    for f in [c for c in ccfg["output_columns"] + ["_pages"] if any(c in k.columns for k in keyed)]:
+        order = sorted(range(len(keyed)), key=lambda i: (stacked[i].attrs["ranks"].get(f, 99), i))
         col = pd.Series(index=base.index, dtype=object)
         for i in order:
             if f in keyed[i].columns:
                 col = col.combine_first(keyed[i][f].reindex(base.index))
         base[f] = col
     base = base.reset_index()
-    # types: numbers for double columns, as-printed text otherwise
-    for c in cfg["collateral"].get("numeric_columns", []):
+    for c in ccfg.get("numeric_columns", []):
         if c in base:
             base[c] = base[c].map(lambda v: to_num(str(v)) if pd.notna(v) and str(v).strip() else None)
-    base["deal name"], base["report_month"] = deal, month
-    return base.reindex(columns=cfg["collateral"]["output_columns"] + ["_pages"]), checks, events
+    return base

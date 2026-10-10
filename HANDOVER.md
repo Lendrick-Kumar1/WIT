@@ -1,138 +1,100 @@
-# WIT: Handover (v3)
+# WIT: handover
 
-## 1. What was wrong before, in one paragraph
-Every tool you tried (Camelot, `find_tables()`, Docling/egret) starts by **guessing where the tables are and how many there are**. On borderless dashboards, and on pages split into 2 or 3 bands, that guess is wrong: no table, one giant blob, or 4 tables where there are 3. Everything downstream then breaks, and falling back to a bigger model doesn't help, because the bigger model makes the **same kind of guess**.
+CLO trustee reports (born-digital PDFs) → 3 Excel files per deal: **Balance**, **Performance**,
+**Collateral**. CPU only, no model on the main path, about 2–10 s per report.
 
-## 2. What this code does instead
-It never guesses tables. It reads the PDF's own text (exact words and their positions) and looks for **the words your output needs**:
+Read this, then `CODE_GUIDE.md` (file by file, every rule, its test).
+
+## 1. How it works
+
+Other tools (Camelot, `find_tables()`, Docling) first **guess where the tables are**. On dashboards
+and banded pages that guess goes wrong, and everything downstream breaks. This code does not guess:
 
 | Output | It looks for | Then |
 |---|---|---|
-| **Performance** | a **header row** containing a result word (Result / Pass/Fail) plus test / current / trigger words | reads every row under that header until a separator line or a big gap. Two header sets side by side mean two tables. |
-| **Balance** | the **label** of each field ("Aggregate Principal Balance") as its own phrase | takes the number right of it on the same line; else the number directly under it |
-| **Collateral** | tables whose **column headers** map to your schema (Security ID, Principal Balance, Moody's Rating …) | stacks the same table across pages and joins different tables on the security ID |
+| Performance | a header line with a *result* word plus test/current/trigger words | reads the rows under it; side-by-side tables are split at each test column |
+| Balance | each field's **label** as its own phrase | the number right of it, else directly below it; or the **total of a column** on a named page |
+| Collateral | pages cut into **crops** (one table each, from the page's own separator lines) | each crop read as one table; tables joined across page breaks; subtotals/totals **checked**; headers mapped to the schema; tables joined on the security ID |
 
-It also fixes two PDF quirks that confused the other tools: US Bank pages are **stored rotated 90°**, and their band lines are **images**, not drawn lines.
+Pages that are stored rotated, and separator lines drawn as images, are handled in `pdfpage.py`.
 
-## 3. How robust is "the number to the right of a label"? An honest answer
-**Why it holds up:** trustees print reports from a **fixed template per deal**. Labels and header words are the template's own vocabulary, and they almost never change month to month. Positions are never stored; they're measured fresh on every page, relative to the words themselves. So layout shifts, extra rows and longer names don't break it.
+## 2. How sure is it
 
-**The rules are strict, not "grab anything nearby":**
-- The label must be **its own phrase** (a separate text run), so a label can't be matched inside a sentence.
-- Only the **numbers immediately after** the label, stopping at the next text or a vertical rule. This is how it avoided picking a number from the neighbouring table on your dashboard.
-- If there are **several numbers** (Current | Prior), it uses the column header named in config. If there's none, it flags `ambiguous`.
-- If there's nothing to the right, it looks **directly below**, and only if exactly one number sits under the label.
+- Every printed subtotal and total in the collateral tables is compared with the sum of the rows
+  read (sheet `collateral_sums`). If they match, no row on those pages was lost or merged.
+- Uncertain values get a status instead of a guess: `_status` on test rows, `status` on balance
+  values (ok / ambiguous / conflict / missing), `check: ...` on sums.
+- `_run_report.xlsx` gathers all of it. Open it first after every run.
 
-**Where it can still go wrong, and what happens then:**
+## 3. Inputs
 
-| Situation | Result |
-|---|---|
-| Label not found (trustee changed the wording) | `missing`: **flagged, never invented** |
-| Two different values for the same label | `conflict`: flagged; the first page in your `pages.balance` order wins |
-| A test row whose current value is empty or a dash | row kept, `_status = check: no current` |
-| Test name looks wrong (a number, too short) | `_status = check: test name?` |
-| A header word this code doesn't know | that column is ignored. You add the word to config once; the "no current" flag tells you |
-
-**The rule that matters most:** when it isn't sure, it **says so** in `_status`, `_balance_sources.status` and `_run_report.xlsx`, instead of writing a wrong number. A wrong value that looks right is the expensive failure, and the design avoids that. A flagged value costs you a look at one page.
-
-**What it doesn't do:** read scanned PDFs (it needs the text layer, and all your samples have one), or read charts.
-
-## 4. Inputs now come from your org's metadata, not the PDF
 ```
-deal list Excel  ->  active deals + trustee            (config/sources.yaml: path, column names)
-reports root     ->  <deal folder>/<Monthly|Quarterly|Intra Trustee Report>/<2026_8 ...pdf>
---period 2026-08 ->  first report-type folder (in priority order) that has the file
+deal list Excel  ──► active deals + trustee          config/sources.yaml (path, column names)
+reports root     ──► <deal>/<Monthly|Quarterly|Intra Trustee Report>/<file named 2026_8 ...>
+--period 2026-08 ──► first report-type folder (in priority order) that has the file
 ```
-So **deal name, trustee and report month come from metadata**, which is reliable. The trustee from the deal list selects the config. If a trustee has more than one layout (US Bank A/B, BNY A/B), the `detect:` patterns pick between them.
+Deal name, trustee and month come from this metadata. The trustee picks
+`config/trustees/<name>.yaml`; if a trustee has several layouts, its `detect:` patterns choose.
 
-## 5. Results on your 7 samples (one run, demo folder tree, v3_8)
+## 4. Run
 
-| Deal | Config | Tests | Collateral rows | Sums ok / to check | Time |
-|---|---|---|---|---|---|
-| Capital Four CLO I | bny_mellon_a | 78 | 140 | 7 / 0 | 2.8 s |
-| Providus CLO VII | bny_mellon_a | 76 | 204 | 6 / 1 | 3.9 s |
-| Providus CLO II (from the *Quarterly* folder) | bny_mellon_b | 63 | 158 | 2 / 0 | 1.3 s |
-| Arini European CLO I | citi | 18 | 192 | 0 / 0 | 4.2 s |
-| Anchorage CLO 5 | us_bank_a | 62 | 123 | 1 / 0 | 2.8 s |
-| Segovia CLO 3 | us_bank_a | 16 | 170 | 1 / 0 | 1.5 s |
-| Example Wilmington | (no report) | MISSING reported | | | |
+```bash
+poetry run python demo/make_demo.py                 # demo tree from the sample PDFs in reports/
+poetry run python run.py --period 2026-08           # all active deals
+poetry run python run.py --period 2026-08 --trustee "U.S. Bank"
+poetry run python run.py some.pdf                   # one PDF, trustee detected from its text
+poetry run python run.py some.pdf --dump 3          # page 3: every crop table + label/value pairs
+poetry run python run.py ... --fallback             # XLarge for crops whose checks fail (slow)
+poetry run python tools/crop_test.py some.pdf --no-docling   # see how pages are cropped and read
+poetry run python tests/run_tests.py                # 30 rule tests, no PDFs needed
+```
+Output: `out/<period>/<deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx` and
+`out/<period>/_run_report.xlsx` (sheets: summary, balance_sources, performance_flags,
+collateral_gaps, collateral_sums, xlarge_fallback).
 
-"Sums ok" = subtotals / totals printed in the collateral tables that equal the sum of the rows
-read (sheet `collateral_sums` in `_run_report.xlsx`). A total that matches proves no security
-row was lost or merged on those pages.
+## 5. Status on the 6 sample reports (demo deals 1–6)
 
-**Status:**
-- **Performance:** solid.
-- **Balance:** the mechanism works, but the labels are placeholders.
-- **Collateral:** rows, IDs and principal balances verified by the sum checks; only 6-15 of the 29
-  columns fill. The rest needs page key terms and header synonyms from your legacy repo.
+| Demo deal | Layout | Tests | Collateral rows | Sums ok / to check |
+|---|---|---|---|---|
+| 1 | bny_mellon_a | 78 | 140 | 7 / 0 |
+| 2 | bny_mellon_a | 76 | 204 | 6 / 1 (amount in a column the rows don't use) |
+| 3 (Quarterly folder) | bny_mellon_b | 63 | 158 | 2 / 0 |
+| 4 | citi | 18 | 192 | 0 / 0 (no printed totals) |
+| 5 | us_bank_a | 62 | 123 | 1 / 0 |
+| 6 | us_bank_a | 16 | 170 | 1 / 0 |
+| 7 | (no report) | reported as MISSING | | |
 
-### v3_8: what changed in Collateral (same deals, compared cell by cell with v3_7)
-- **Reader:** every collateral page is cut into crops (one table each) and the same table is
-  stitched across consecutive pages before reading groups, sections and totals.
-- **Principal balance was wrong for 62 securities before** (Capital Four, Providus VII, Arini,
-  Anchorage): it came from tables that split one security into lots (interest accrual: 445,979.01 +
-  863,180.89 instead of 1,309,159.90) or from *Par Amount* next to *Principal Balance*. Now: rows
-  come from the table with the most distinct securities, and each column from the table whose
-  header names it most directly.
-- **Centred cells** (Arini: "United Kingdom" / row / "(Great Britain)") are now read whole.
-- **Last row of a page** is no longer cut by a fixed footer line; title and footer are measured.
-- **Filled:** 923 previously empty cells (S&P / Fitch ratings, countries, industries).
-- **Known, by design:** Providus II `issuer` now shows the asset table's *Security* text
-  ("Solera LLC - Euro Term Loan"), because every Providus II table labels that column *Security*.
-  Splitting issuer from facility is a business rule to add later (legacy repo).
-- **Optional XLarge fallback** (`--fallback`) for crops whose IDs or sums fail; off by default.
-- `collateral.reader: regions` in `config/defaults.yaml` switches back to the older reader.
+- **Performance:** solid on all layouts, including dashboards and banded pages.
+- **Balance:** the mechanism works. The labels are placeholders until filled in from the legacy repo.
+- **Collateral:** rows, IDs and principal balances are verified by the sums. 6–15 of the 29 columns
+  fill; the rest needs page key terms and header synonyms from the legacy repo.
 
-## 6. Folder map
+## 6. On the org laptop: config only
+
+1. `config/sources.yaml`: the real deal-list path and column names, reports root, folder names.
+2. Per trustee: copy `config/trustees/_template.yaml` to `<trustee>.yaml` and fill in `names`,
+   `pages` (legacy key terms), `balance.labels`, and `collateral.columns` where headers differ.
+3. Run one trustee: `python run.py --period 2026-08 --trustee "<name>"`.
+4. Open `_run_report.xlsx`:
+   - `collateral_sums` rows starting with `check:` mark pages where rows were lost or merged;
+   - `collateral_gaps` lists columns with no synonym yet;
+   - `balance_sources` shows balances with status other than ok.
+5. Record what went wrong as a **pattern** (no deal names), e.g. "total printed one column right of
+   its rows", then fix it in code with a test, or in config.
+
+## 7. Folder map
+
 ```
 WIT/
-├── run.py                        python run.py --period 2026-08 [--trustee "US Bank"]
+├── run.py                      entry point (calls src/wit/run.py)
 ├── config/
-│   ├── sources.yaml              deal-list path + columns, reports root, folder priority, file naming
-│   ├── defaults.yaml             shared vocabulary (header words, categories, column synonyms)
-│   └── trustees/*.yaml           one per trustee layout; _template.yaml to add more
-├── src/wit/
-│   ├── sources.py                deal list + folder walk -> which PDF per deal
-│   ├── config.py                 merge defaults + trustee, pick the layout
-│   ├── pages.py                  page selection by key terms
-│   ├── pdfpage.py                rotation fix, separators (lines AND images), rows, numbers
-│   ├── performance.py, balance.py, collateral.py, geometry.py
-│   ├── crops.py                  page -> one crop per table (section bars, vertical rules)
-│   ├── croptable.py              crop -> ONE table: grouped rows, subtotals, sum checks
-│   ├── fallback.py               XLarge on one crop (only with --fallback)
-│   └── run.py                    orchestration, statuses, Excel outputs
-├── demo/make_demo.py             builds an org-style demo tree from reports/
-└── out/<period>/<Deal>/{Balance,Performance,Collateral}.xlsx  +  out/<period>/_run_report.xlsx
+│   ├── sources.yaml            deal list + reports root + folder priority + file naming
+│   ├── defaults.yaml           shared vocabulary: header roles, categories, column synonyms
+│   └── trustees/*.yaml         one per trustee layout (_template.yaml to add one)
+├── src/wit/                    the code (see CODE_GUIDE.md)
+├── tools/crop_test.py          how a PDF is cropped and read (+ optional XLarge comparison)
+├── tools/compare_outputs.py    cell-by-cell comparison of two output folders
+├── tests/                      rule tests on synthetic words (python tests/run_tests.py)
+└── demo/make_demo.py           builds a demo deal list + folder tree from reports/
 ```
-
-## 7. What you do next
-
-**A. Run it on your laptop (15 minutes)**
-```bash
-poetry add pymupdf pandas openpyxl pyyaml
-poetry run python demo/make_demo.py            # builds demo/ from reports/
-poetry run python run.py --period 2026-08      # -> out/
-```
-Open `out/_run_report.xlsx` first, then the 3 output files.
-
-**B. On the org laptop: config only, no code**
-1. `config/sources.yaml`: the real deal-list path and column names, the reports root, and the folder names.
-2. For each trustee, fill in `config/trustees/<name>.yaml` from the legacy repo:
-   - `names` (how the deal list spells the trustee)
-   - `pages` (key terms)
-   - `balance.labels`
-   - `collateral.columns` (only where they differ from the defaults)
-3. Run one period for one trustee: `python run.py --period 2026-08 --trustee "U.S. Bank"`.
-4. Look at the flagged rows in `_run_report.xlsx`. Each one points to a config gap or a genuine oddity.
-
-**C. Claude Code (new chat, in `WIT/`)**
-> Read HANDOVER.md and CLAUDE.md. Do not restructure. Run `python demo/make_demo.py` and `python run.py --period 2026-08`, and confirm the numbers in HANDOVER §5. Then: for each trustee config, list the empty Collateral columns (`_gaps` sheet), find which pages hold that data (by page title), and add page key terms and header synonyms to the trustee YAML. After each change, re-run and show that no count in §5 went down.
-
-**Later:** stakeholder range checks; Docling only as a last-resort fallback for a page where a *required* table yields nothing; a regression folder with one known-good Excel per trustee.
-
-## 8. Rules that keep it from failing again
-1. **No coordinates in config or code.** Only words; positions are measured on each page.
-2. **A trustee difference goes in YAML**, never as `if trustee == ...` in code.
-3. **Never silently guess:** an uncertain value gets a status, not a number.
-4. **After any change, re-run every sample** and compare with §5. Nothing may go down.
+Never commit PDFs, outputs (`out/`) or models.

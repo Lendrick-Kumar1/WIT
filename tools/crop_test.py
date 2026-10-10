@@ -1,23 +1,21 @@
-"""Experiment: does egret-XLarge + TableFormer get it right when it only sees ONE table?
+"""Look at how a PDF is cut into crops and read, page by page (diagnostic tool).
 
-For every page of the given PDFs:
-  1. full page  -> Docling (egret-xlarge layout, TableFormer ACCURATE, OCR off)
-  2. PyMuPDF cuts the page into crops (section bars + full-height vertical rules), deterministic
-  3. each crop  -> Docling (same settings)          and  -> our PyMuPDF table engine
-Everything is written next to each other so you can compare by eye.
+For every page:
+  - the crops (crops.find_crops) as PNG + one-page PDF
+  - each crop read by PyMuPDF (one table per crop, subtotals/totals checked)
+  - optional: XLarge on the full page and on every crop, for comparison
+And per PDF: tables that run over a page break, joined, with every subtotal/total checked.
 
-  poetry run python tools/crop_test.py probs/*.pdf
-  poetry run python tools/crop_test.py probs/dashboard_bands.pdf --pages 1,2
-  poetry run python tools/crop_test.py probs/*.pdf --no-docling        # only crops + PyMuPDF
+  poetry run python tools/crop_test.py probs/*.pdf --no-docling      # PyMuPDF only (fast)
+  poetry run python tools/crop_test.py some.pdf --pages 3,4          # + XLarge (slow, CPU)
+  poetry run python tools/crop_test.py some.pdf --no-full            # XLarge on crops only
 
-Output: out/crop_test/<pdf>/p<N>/
-          page.png                   the full page
-          crop<k>.png / crop<k>.pdf  each crop (the PDF is what Docling receives)
-          tables.xlsx                one sheet per table: full_t1.., c1_docling_t1.., c1_pymupdf_t1..
-        out/crop_test/summary.xlsx   one row per (page, unit, engine): tables found, shapes, seconds
+Output: out/crop_test/<pdf>/p<N>/  page.png, crop<k>.png, crop<k>.pdf, tables.xlsx
+                                   (sheets full_t*, c<k>_docling_t*, c<k>_pymupdf_t*)
+        out/crop_test/summary.xlsx sheet summary (one row per page/unit/engine),
+                                   sheet stitched_checks (tables over page breaks)
 """
 import argparse
-import os
 import sys
 import time
 from pathlib import Path
@@ -26,72 +24,25 @@ import pandas as pd
 import pymupdf
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from wit import geometry as G                          # noqa: E402
-from wit.crops import find_crops, preview_png, write_crop_pdf  # noqa: E402
-from wit.collateral import _stitch                     # noqa: E402
-from wit.croptable import group_rows, page_crop_tables, read_crop  # noqa: E402
-from wit.pdfpage import page_model                     # noqa: E402
+from wit.crops import crop_table, find_crops, page_tables, preview_png, write_crop_pdf  # noqa: E402
+from wit.pdfpage import page_model                                                      # noqa: E402
+from wit.totals import mark_totals, stitch_pages                                        # noqa: E402
 
 
-# ----------------------------------------------------------------------------- Docling (XLarge)
-def make_converter(artifacts):
-    os.environ.setdefault("HF_HUB_OFFLINE", "1")
-    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
-    from docling.datamodel.base_models import InputFormat
-    from docling.datamodel.layout_model_specs import DOCLING_LAYOUT_EGRET_XLARGE
-    from docling.datamodel.pipeline_options import (LayoutOptions, PdfPipelineOptions,
-                                                    TableFormerMode, TableStructureOptions)
-    from docling.document_converter import DocumentConverter, PdfFormatOption
-
-    opts = PdfPipelineOptions(artifacts_path=artifacts, do_ocr=False, do_table_structure=True)
-    opts.table_structure_options = TableStructureOptions(mode=TableFormerMode.ACCURATE,
-                                                         do_cell_matching=True)
-    opts.layout_options = LayoutOptions(model_spec=DOCLING_LAYOUT_EGRET_XLARGE)
-    return DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
-
-
-def docling_tables(conv, pdf, page_no=None):
-    t0 = time.time()
-    kw = {"page_range": (page_no, page_no)} if page_no else {}
-    res = conv.convert(str(pdf), **kw)
-    dfs = []
-    for t in res.document.tables:
-        try:
-            dfs.append(t.export_to_dataframe(doc=res.document))
-        except TypeError:
-            dfs.append(t.export_to_dataframe())
-    return dfs, time.time() - t0
-
-
-# ----------------------------------------------------------------------------- PyMuPDF engine
-def pymupdf_tables(page, engine="crop"):
-    """engine='crop' (default): the whole crop is ONE table (croptable.read_crop: grouped rows,
-    subtotals, checks). engine='old': the previous behaviour (re-segment the crop with xy_cut)."""
-    t0 = time.time()
-    if engine == "crop":
-        df = read_crop(page)
-        return ([df] if df is not None else []), time.time() - t0
-    words, H, V = page_model(page)
-    dfs = []
-    if len(words) >= 3:
-        for blk in G.attach_headers(G.xy_cut(words, H, V)):
-            r = G.Region(page=page.number + 1, words=blk, bbox=G.bbox(blk))
-            G.build_table(r)
-            if r.df is not None and len(r.df) and r.df.shape[1] >= 2:
-                dfs.append(r.df)
-    return dfs, time.time() - t0
-
-
-def check_flags(dfs):
-    """'' if nothing to check, else e.g. '3 ok, 1 check' (from croptable's _check column)."""
-    vals = [v for df in dfs if "_check" in df for v in df["_check"] if v]
+def check_flags(df):
+    """'' if nothing to check, else e.g. '3 ok, 1 check'."""
+    vals = [v for v in df["_check"] if v] if df is not None and "_check" in df else []
     if not vals:
         return ""
     ok = sum(v == "ok" for v in vals)
     return f"{ok} ok" + (f", {len(vals) - ok} check" if len(vals) > ok else "")
 
 
-def peak_ram_mb():
+def shapes(dfs):
+    return " ".join(f"{x.shape[0]}x{x.shape[1]}" for x in dfs)
+
+
+def ram_mb():
     try:
         import psutil
         return round(psutil.Process().memory_info().rss / 1e6)
@@ -99,79 +50,81 @@ def peak_ram_mb():
         return None
 
 
+def stitched_checks(doc, pdf, pages):
+    out = []
+    parts = [(p - 1, raw.assign(_page=p)) for p in pages for _, raw in page_tables(doc[p - 1])]
+    for pg, df in stitch_pages(parts):
+        marked = mark_totals(df)
+        if len(pg) < 2 or "_row" not in marked:
+            continue
+        for _, r in marked[marked["_row"] != "detail"].iterrows():
+            out.append(dict(pdf=Path(pdf).name, pages=f"{pg[0] + 1}-{pg[-1] + 1}", row=r["_row"],
+                            label=next((v for v in r if str(v).strip()), "")[:50],
+                            check=r["_check"] or "not checked"))
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("pdfs", nargs="+")
     ap.add_argument("--pages", help="comma-separated page numbers (default: all)")
-    ap.add_argument("--no-docling", action="store_true", help="skip Docling (crops + PyMuPDF only)")
-    ap.add_argument("--artifacts", default=os.environ.get(
-        "DOCLING_ARTIFACTS_PATH", str(Path.home() / ".cache" / "docling" / "models")))
-    ap.add_argument("--no-full", action="store_true", help="skip Docling on FULL pages (crops only)")
-    ap.add_argument("--engine", choices=["crop", "old"], default="crop",
-                    help="PyMuPDF: crop = whole crop is one table (default); old = re-segment it")
+    ap.add_argument("--no-docling", action="store_true", help="PyMuPDF only (no XLarge)")
+    ap.add_argument("--no-full", action="store_true", help="XLarge on crops only, not on full pages")
+    ap.add_argument("--artifacts", help="Docling models folder (default ~/.cache/docling/models)")
     ap.add_argument("--out", default="out/crop_test")
     a = ap.parse_args()
 
-    conv = None
+    xl = None
     if not a.no_docling:
-        print("loading Docling (egret-xlarge + TableFormer ACCURATE, OCR off) ...")
-        conv = make_converter(a.artifacts)
+        from wit.fallback import XLarge
+        print("XLarge (egret-xlarge + TableFormer ACCURATE, OCR off) is loaded on first use ...")
+        xl = XLarge(a.artifacts)
 
     out_root = Path(a.out)
     rows, stitched = [], []
     for pdf in a.pdfs:
         doc = pymupdf.open(pdf)
+        name = Path(pdf).name
         pages = [int(x) for x in a.pages.split(",")] if a.pages else range(1, len(doc) + 1)
-        # tables that run over a page break, stitched (same columns on consecutive pages), then
-        # every subtotal / total checked against ALL its rows
-        parts = [(p - 1, raw.assign(_page=p)) for p in pages for _, raw in page_crop_tables(doc[p - 1])]
-        for pg, df in _stitch(parts):
-            g = group_rows(df)
-            if len(pg) < 2 or "_row" not in g:
-                continue
-            for _, r in g[g["_row"] != "detail"].iterrows():
-                stitched.append(dict(pdf=Path(pdf).name, pages=f"{pg[0] + 1}-{pg[-1] + 1}",
-                                     row=r["_row"], label=next((v for v in r if str(v).strip()), "")[:50],
-                                     check=r["_check"] or "not checked"))
+        stitched += stitched_checks(doc, pdf, pages)
         for p in pages:
             d = out_root / Path(pdf).stem / f"p{p}"
             d.mkdir(parents=True, exist_ok=True)
-            doc[p - 1].get_pixmap(dpi=90).save(d / "page.png")
+            page = doc[p - 1]
+            page.get_pixmap(dpi=90).save(d / "page.png")
             sheets = {}
-
-            if conv and not a.no_full:
-                dfs, sec = docling_tables(conv, pdf, p)
-                for i, df in enumerate(dfs, 1):
-                    sheets[f"full_t{i}"] = df
-                rows.append(dict(pdf=Path(pdf).name, page=p, unit="FULL PAGE", engine="docling",
-                                 tables=len(dfs), shapes=" ".join(f"{x.shape[0]}x{x.shape[1]}" for x in dfs),
-                                 seconds=round(sec, 1), ram_mb=peak_ram_mb()))
-
-            for k, rect in enumerate(find_crops(doc[p - 1]), 1):
+            if xl and not a.no_full:
+                t0 = time.time()
+                dfs = xl.pdf_tables(pdf, p)
+                sheets.update({f"full_t{i}": df for i, df in enumerate(dfs, 1)})
+                rows.append(dict(pdf=name, page=p, unit="FULL PAGE", engine="docling", tables=len(dfs),
+                                 shapes=shapes(dfs), seconds=round(time.time() - t0, 1), ram_mb=ram_mb()))
+            model = page_model(page)
+            for k, rect in enumerate(find_crops(page, model), 1):
                 cpdf = d / f"crop{k}.pdf"
                 write_crop_pdf(doc, p - 1, rect, cpdf)
-                preview_png(cpdf, d / f"crop{k}.png", dpi=110)
-                crop_page = pymupdf.open(cpdf)[0]
-                dfs, sec = pymupdf_tables(crop_page, a.engine)
-                for i, df in enumerate(dfs, 1):
-                    sheets[f"c{k}_pymupdf_t{i}"] = df
-                rows.append(dict(pdf=Path(pdf).name, page=p, unit=f"crop{k}", engine="pymupdf",
-                                 tables=len(dfs), shapes=" ".join(f"{x.shape[0]}x{x.shape[1]}" for x in dfs),
-                                 seconds=round(sec, 2), ram_mb=None, checks=check_flags(dfs),
-                                 crop_box=[round(v) for v in rect]))
-                if conv:
-                    dfs, sec = docling_tables(conv, cpdf)
-                    for i, df in enumerate(dfs, 1):
-                        sheets[f"c{k}_docling_t{i}"] = df
-                    rows.append(dict(pdf=Path(pdf).name, page=p, unit=f"crop{k}", engine="docling",
-                                     tables=len(dfs), shapes=" ".join(f"{x.shape[0]}x{x.shape[1]}" for x in dfs),
-                                     seconds=round(sec, 1), ram_mb=peak_ram_mb(),
+                preview_png(cpdf, d / f"crop{k}.png")
+                t0 = time.time()
+                df = crop_table(model[0], rect)
+                df = mark_totals(df) if df is not None else None
+                dfs = [df] if df is not None else []
+                if df is not None:
+                    sheets[f"c{k}_pymupdf_t1"] = df
+                rows.append(dict(pdf=name, page=p, unit=f"crop{k}", engine="pymupdf", tables=len(dfs),
+                                 shapes=shapes(dfs), seconds=round(time.time() - t0, 2), ram_mb=None,
+                                 checks=check_flags(df), crop_box=[round(v) for v in rect]))
+                if xl:
+                    t0 = time.time()
+                    dfs = xl.pdf_tables(cpdf)
+                    sheets.update({f"c{k}_docling_t{i}": x for i, x in enumerate(dfs, 1)})
+                    rows.append(dict(pdf=name, page=p, unit=f"crop{k}", engine="docling", tables=len(dfs),
+                                     shapes=shapes(dfs), seconds=round(time.time() - t0, 1), ram_mb=ram_mb(),
                                      crop_box=[round(v) for v in rect]))
             if sheets:
                 with pd.ExcelWriter(d / "tables.xlsx") as xw:
-                    for name, df in sheets.items():
-                        df.to_excel(xw, sheet_name=name[:31], index=False)
-            print(f"{Path(pdf).name} p{p}: {sum(1 for r in rows if r['page'] == p and r['pdf'] == Path(pdf).name)} results")
+                    for sheet, df in sheets.items():
+                        df.to_excel(xw, sheet_name=sheet[:31], index=False)
+            print(f"{name} p{p}: {sum(1 for r in rows if r['page'] == p and r['pdf'] == name)} results")
     out_root.mkdir(parents=True, exist_ok=True)
     summ = pd.DataFrame(rows)
     summ["correct? (fill in)"] = ""
@@ -179,9 +132,9 @@ def main():
         summ.to_excel(xw, sheet_name="summary", index=False)
         pd.DataFrame(stitched).to_excel(xw, sheet_name="stitched_checks", index=False)
     if stitched:
-        st_df = pd.DataFrame(stitched)
-        print("\nacross pages:", (st_df["check"] == "ok").sum(), "ok,",
-              st_df["check"].str.startswith("check").sum(), "to check  (sheet stitched_checks)")
+        s = pd.DataFrame(stitched)
+        print("\nacross pages:", (s["check"] == "ok").sum(), "ok,",
+              s["check"].str.startswith("check").sum(), "to check  (sheet stitched_checks)")
     print(f"\nsummary: {(out_root / 'summary.xlsx').resolve()}")
 
 

@@ -1,15 +1,16 @@
-"""XLarge fallback for ONE crop (off by default; `python run.py ... --fallback`).
+"""XLarge (Docling egret-xlarge layout + TableFormer ACCURATE, OCR off, offline models).
 
-Same settings as tools/crop_test.py (egret-xlarge layout + TableFormer ACCURATE, OCR off, offline
-models). Docling is imported only when a crop actually needs it, and the converter is loaded once.
-The crop is the original page with its CropBox set (text layer kept), so no OCR is involved.
+Used in two places, both optional:
+  - run.py --fallback        re-read ONE crop whose IDs or sums failed (collateral.read_pages)
+  - tools/crop_test.py       compare XLarge with PyMuPDF on full pages and crops
+
+Docling is imported only when a table is actually needed, and the converter is loaded once.
+A crop is the original page with its CropBox set (text layer kept), so no OCR is involved.
 """
 import os
 import tempfile
 import time
 from pathlib import Path
-
-import pandas as pd
 
 from .crops import write_crop_pdf
 
@@ -42,19 +43,24 @@ class XLarge:
             self.conv = DocumentConverter(format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=opts)})
         return self.conv
 
-    def tables(self, doc, pno, rect):
-        """Tables XLarge finds in crop `rect` (display coordinates) of page `pno` (0-based)."""
+    def pdf_tables(self, pdf, page_no=None):
+        """Tables XLarge finds in a PDF (or in one 1-based page of it) -> [DataFrame of text]."""
         t0 = time.time()
-        pdf = write_crop_pdf(doc, pno, rect, str(self.tmp / f"p{pno + 1}_{self.calls}.pdf"))
-        res = self._converter().convert(str(pdf))
+        kw = {"page_range": (page_no, page_no)} if page_no else {}
+        res = self._converter().convert(str(pdf), **kw)
         dfs = []
         for t in res.document.tables:
             try:
                 df = t.export_to_dataframe(doc=res.document)
-            except TypeError:
+            except TypeError:                     # older docling
                 df = t.export_to_dataframe()
             df.columns = [str(c) for c in df.columns]
             dfs.append(df.fillna("").astype(str))
         self.calls += 1
         self.seconds += time.time() - t0
         return dfs
+
+    def tables(self, doc, pno, rect):
+        """Tables XLarge finds in crop `rect` of page `pno` (0-based)."""
+        pdf = write_crop_pdf(doc, pno, rect, self.tmp / f"p{pno + 1}_{self.calls}.pdf")
+        return self.pdf_tables(pdf)
