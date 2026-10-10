@@ -20,12 +20,20 @@ from .pdfpage import page_model, phrases, rows_of, to_num
 FIELDS = {}
 
 
+TABLE_FIELDS = {}
+
+
 def configure(cfg):
-    """cfg['balance']['labels'][field] = list of regexes OR {labels: [...], column: regex}."""
-    global FIELDS
-    FIELDS = {}
+    """cfg['balance']['labels'][field] =
+         list of regexes                         -> label lookup
+         {labels: [...], column: regex}          -> label lookup, pick the number under `column`
+         {page: regex, column: regex}            -> TOTAL of a column on a given page (table_total)"""
+    global FIELDS, TABLE_FIELDS
+    FIELDS, TABLE_FIELDS = {}, {}
     for field, spec in cfg["balance"]["labels"].items():
-        if isinstance(spec, dict):
+        if isinstance(spec, dict) and spec.get("page"):
+            TABLE_FIELDS[field] = spec
+        elif isinstance(spec, dict):
             FIELDS[field] = dict(labels=spec.get("labels", []), column=spec.get("column"))
         else:
             FIELDS[field] = dict(labels=spec, column=None)
@@ -85,6 +93,60 @@ def candidates(page):
                     if len(below) == 1:
                         out.append((field, to_num(below[0]["t"]), "below", label, page.number + 1))
     return out
+
+
+def table_total(doc, cfg, spec):
+    """Total of one column on the page(s) whose title matches spec['page'].
+
+    value  = the printed total under that column if there is one, else the sum of the rows.
+    status = ok             printed total == sum of rows (or only one of them exists)
+             conflict       printed total != sum of rows (printed total is used)
+             ok (no rows)   page exists but has no rows (e.g. "There are no ...") -> 0
+             missing        no page with that title in the report
+    """
+    from .collateral import page_tables
+    from .pages import page_texts
+
+    titles = page_texts(doc, cfg.get("layout", {}).get("title_band", 0.2))
+    pages = [i for i, t in enumerate(titles) if re.search(spec["page"], t["title"], re.I)]
+    if not pages:
+        return dict(value=None, status="missing", how="table", label=spec["page"], page=None, n=0)
+    rows_sum, n_rows, printed = 0.0, 0, None
+    for i in pages:
+        for df in page_tables(doc[i], cfg):
+            cols = [c for c in df.columns if re.search(spec["column"], str(c), re.I)]
+            if not cols:
+                continue
+            vals = [to_num(str(v)) for v in df[cols[0]] if str(v).strip()]
+            vals = [v for v in vals if v is not None]
+            rows_sum += sum(vals)
+            n_rows += len(vals)
+        # printed total: a line holding only numbers, with one number in the SAME x-position as the
+        # column's own values (located by matching the values' text on the page)
+        words, _, _ = page_model(doc[i])
+        col_vals = set()
+        for df in page_tables(doc[i], cfg):
+            cols = [c for c in df.columns if re.search(spec["column"], str(c), re.I)]
+            if cols:
+                col_vals |= {str(v).strip() for v in df[cols[0]] if str(v).strip()}
+        xs = [(w["x0"] + w["x1"]) / 2 for w in words if w["t"] in col_vals]
+        if xs:
+            col_x = sum(xs) / len(xs)
+            for r in rows_of(words):
+                if len(r["ws"]) >= 1 and all(to_num(w["t"]) is not None for w in r["ws"]) \
+                        and not any(w["t"] in col_vals and len(r["ws"]) > 1 and False for w in r["ws"]):
+                    near = [w for w in r["ws"] if abs((w["x0"] + w["x1"]) / 2 - col_x) < 25]
+                    if near and r["ws"][0]["x0"] > min(w["x0"] for w in words if w["t"] in col_vals) - 5:
+                        printed = to_num(near[0]["t"])
+    page_no = pages[0] + 1
+    if n_rows == 0 and printed is None:
+        return dict(value=0.0, status="ok (no rows)", how="table", label=spec["page"], page=page_no, n=0)
+    if printed is not None and n_rows and abs(printed - rows_sum) > 0.01:
+        return dict(value=printed, status="conflict", how="table: printed total vs sum",
+                    label=spec["page"], page=page_no, n=n_rows)
+    value = printed if printed is not None else round(rows_sum, 2)
+    how = "table: printed total" + (" = sum of rows" if n_rows else "") if printed is not None else "table: sum of rows"
+    return dict(value=value, status="ok", how=how, label=spec["page"], page=page_no, n=n_rows)
 
 
 def resolve(cands):

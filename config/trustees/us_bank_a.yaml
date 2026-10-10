@@ -11,6 +11,10 @@ pages:
 balance:
   labels:
     principal balance: ["aggregate principal balance", "^principal amount:?$"]
-    default balance:   ["principal balance of defaulted"]
+    default balance:                       # total of a column on a specific page
+      page: "Defaulted Obligations Detail"
+      column: "^principal balance$"
     proceeds balance:  ["^principal proceeds$"]
     ccc balance:       ["<<PLACEHOLDER: label from legacy repo>>"]
+    # example of the same pattern, if CCC balance is the total of a CCC page:
+    # ccc balance: {page: "<<e.g. Fitch CCC Obligation>>", column: "^principal balance$"}

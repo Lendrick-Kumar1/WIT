@@ -76,6 +76,8 @@ def process(pdf, defaults, trustees, meta=None):
     for i in select_pages(doc, cfg, "balance"):
         cands += B.candidates(doc[i])
     res = B.resolve(cands)
+    for f, spec in B.TABLE_FIELDS.items():
+        res[f] = B.table_total(doc, cfg, spec)
     bal = pd.DataFrame([{"deal name": deal, "report_month": month, "asset class": ac,
                          **{f: res.get(f, {}).get("value") for f in BAL_FIELDS}}])[BAL_COLS]
     bal_src = pd.DataFrame([{"field": f, **r} for f, r in res.items()])

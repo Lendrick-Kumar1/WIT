@@ -19,7 +19,10 @@ pages:                        # paste the legacy key terms here (regex). Empty =
   collateral:  ["<<e.g. Detail of Assets>>", "<<e.g. Ratings Detail>>"]
 
 balance:
-  labels:                     # field -> label(s) as printed in this trustee's reports
+  labels:                     # each field, ONE of three forms:
+    # a) label next to its number:      principal balance: ["^aggregate principal balance$"]
+    # b) label with several numbers:    principal balance: {labels: ["^aggregate principal balance$"], column: "current"}
+    # c) total of a column on a page:   default balance: {page: "Defaulted Obligations Detail", column: "^principal balance$"}
     principal balance: ["<<label>>"]
     default balance:   ["<<label>>"]
     proceeds balance:  ["<<label>>"]
