@@ -40,11 +40,58 @@ def major_separators(page, min_width, min_image_height=3.0):
     return sorted(ys)
 
 
-def find_crops(page, title_band=0.12, footer_band=0.93, min_sep_width=0.6, pad=4.0):
-    """Return a list of crop rects in DISPLAY (rotation-corrected) coordinates."""
+def title_bottom(words, page_height, max_band=0.2):
+    """Bottom of the page's TITLE BLOCK, measured, not assumed: the leading rows that are a single
+    phrase (no column gaps) printed larger than the body text (deal name, section title, 'As of'
+    lines). Stops at the first row that looks like table text (a column header or data).
+    Only rows inside the top `max_band` of the page can be title rows."""
+    import statistics as st
+    if not words:
+        return 0.0
+    body = st.median(w["y1"] - w["y0"] for w in words)
+    bottom, prev_h = 0.0, None
+    for r in rows_of(words):
+        ws = r["ws"]
+        if ws[0]["y1"] > page_height * max_band:
+            break
+        if any(len(w["t"]) >= 4 and w["y1"] - w["y0"] > 2 * (w["x1"] - w["x0"]) for w in ws):
+            break                       # vertical (rotated) column headers: table, not title
+        height = max(w["y1"] - w["y0"] for w in ws)
+        single = all(b["x0"] - a["x1"] < 1.5 * body for a, b in zip(ws, ws[1:]))
+        # larger than body text, or the same size as the title row just above ("As of: ...")
+        big = height >= 1.1 * body or (prev_h is not None and height >= prev_h - 0.5)
+        if not (single and big):
+            break
+        bottom, prev_h = max(w["y1"] for w in ws), height
+    return bottom
+
+
+def footer_top(words, page_height, max_band=0.15):
+    """Top of the page FOOTER, measured: the rows at the very bottom of the page that are cut off
+    from the content above by a clearly larger gap than the normal line step ('Capital Four CLO I
+    DAC as of 03-Jan-2025   Page 9 of 48', 'www.usbank.com/clo'). No such gap -> no footer."""
+    import statistics as st
+    rows = rows_of(words)
+    if len(rows) < 3:
+        return page_height
+    steps = [b["c"] - a["c"] for a, b in zip(rows, rows[1:])]
+    step = st.median(steps)
+    for k in range(len(rows) - 1, 0, -1):
+        if rows[k]["c"] < page_height * (1 - max_band) or _has_amount(rows[k]["ws"]):
+            break                        # a footer never carries money amounts (a subtotal does)
+        if rows[k]["c"] - rows[k - 1]["c"] > 1.25 * step:
+            return min(w["y0"] for w in rows[k]["ws"]) - 0.5
+    return page_height
+
+
+def find_crops(page, title_band=None, footer_band=None, min_sep_width=0.6, pad=4.0):
+    """Return a list of crop rects in DISPLAY (rotation-corrected) coordinates.
+    title_band / footer_band = None: title block and footer are MEASURED on the page
+    (title_bottom / footer_top); a number forces a fixed share of the page height instead."""
     words, H, V = page_model(page)
     W, Ht = page.rect.width, page.rect.height
-    top, bottom = Ht * title_band, Ht * footer_band
+    top = Ht * title_band if title_band is not None else title_bottom(words, Ht) + 0.5
+    bottom = Ht * footer_band if footer_band is not None else footer_top(words, Ht)
     words = [w for w in words if w["y0"] >= top and w["y1"] <= bottom]
     if not words:
         return []

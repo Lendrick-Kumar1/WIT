@@ -7,7 +7,9 @@
 
 Outputs:  out/<period>/<Deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx   (clean, schema only)
           out/<period>/_run_report.xlsx   (all checks in one file: summary, balance_sources,
-                                           performance_flags, collateral_gaps)
+                                           performance_flags, collateral_gaps, collateral_sums,
+                                           xlarge_fallback)
+  --fallback   re-read crops whose checks fail with XLarge (Docling egret-xlarge + TableFormer)
 """
 import argparse
 import re
@@ -47,7 +49,7 @@ def text_deal_info(doc, cfg):
     return name, month
 
 
-def process(pdf, defaults, trustees, meta=None):
+def process(pdf, defaults, trustees, meta=None, xl=None):
     meta = meta or {}
     t0 = time.time()
     doc = pymupdf.open(pdf)
@@ -83,7 +85,7 @@ def process(pdf, defaults, trustees, meta=None):
     bal_src = pd.DataFrame([{"field": f, **r} for f, r in res.items()])
 
     # Collateral
-    coll = collateral(doc, select_pages(doc, cfg, "collateral"), cfg, deal, month)
+    coll, coll_checks, fallback = collateral(doc, select_pages(doc, cfg, "collateral"), cfg, deal, month, xl)
     data_cols = [c for c in cfg["collateral"]["output_columns"] if c not in ("deal name", "report_month")]
     empty_cols = [c for c in data_cols if c not in coll or coll[c].isna().all()]
 
@@ -94,11 +96,14 @@ def process(pdf, defaults, trustees, meta=None):
         tests=len(perf), tests_to_check=n_check,
         **{f"bal:{f}": res.get(f, {}).get("status", "missing") for f in BAL_FIELDS},
         collateral_rows=len(coll), collateral_empty_columns=len(empty_cols),
+        collateral_sums_ok=int((coll_checks["check"] == "ok").sum()),
+        collateral_sums_to_check=int(coll_checks["check"].str.startswith("check").sum()),
+        xlarge_crops=len(fallback),
         seconds=round(time.time() - t0, 1))
     report["needs_attention"] = bool(
         layout == "unknown" or not len(perf) or n_check
         or any(report[f"bal:{f}"] != "ok" for f in BAL_FIELDS) or not len(coll))
-    return report, perf, bal, bal_src, coll, empty_cols
+    return report, perf, bal, bal_src, coll, empty_cols, coll_checks, fallback
 
 
 def write_outputs(results, out, period=""):
@@ -106,8 +111,8 @@ def write_outputs(results, out, period=""):
        out/<period>/_run_report.xlsx  (ONE file with all checks: summary + details per deal)"""
     root = out / (period or "adhoc")
     root.mkdir(parents=True, exist_ok=True)
-    summary, bal_checks, perf_flags, gaps = [], [], [], []
-    for report, perf, bal, bal_src, coll, empty_cols in results:
+    summary, bal_checks, perf_flags, gaps, sums, xl_events = [], [], [], [], [], []
+    for report, perf, bal, bal_src, coll, empty_cols, coll_checks, fallback in results:
         deal = report["deal"] or Path(report["pdf"]).stem
         d = root / re.sub(r'[<>:"/\\|?*]+', "_", deal).strip()
         d.mkdir(parents=True, exist_ok=True)
@@ -123,11 +128,16 @@ def write_outputs(results, out, period=""):
                 perf_flags.append(f.assign(deal=deal)[["deal", "test", "current", "trigger", "result",
                                                        "_status", "_page"]])
         gaps += [{"deal": deal, "empty collateral column": c} for c in empty_cols]
+        if len(coll_checks):
+            sums.append(coll_checks.assign(deal=deal)[["deal", *coll_checks.columns]])
+        xl_events += [{"deal": deal, **e} for e in fallback]
     with pd.ExcelWriter(root / "_run_report.xlsx") as xw:
         pd.DataFrame(summary).to_excel(xw, sheet_name="summary", index=False)
         (pd.concat(bal_checks) if bal_checks else pd.DataFrame()).to_excel(xw, sheet_name="balance_sources", index=False)
         (pd.concat(perf_flags) if perf_flags else pd.DataFrame()).to_excel(xw, sheet_name="performance_flags", index=False)
         pd.DataFrame(gaps).to_excel(xw, sheet_name="collateral_gaps", index=False)
+        (pd.concat(sums) if sums else pd.DataFrame()).to_excel(xw, sheet_name="collateral_sums", index=False)
+        pd.DataFrame(xl_events).to_excel(xw, sheet_name="xlarge_fallback", index=False)
     return root
 
 
@@ -139,12 +149,15 @@ def main(argv=None):
     ap.add_argument("--out", default="out")
     ap.add_argument("--debug", help="comma-separated page numbers: print per-page results")
     ap.add_argument("--dump", help="comma-separated page numbers: print every table + label/value pair read")
+    ap.add_argument("--fallback", action="store_true",
+                    help="XLarge on crops whose checks fail (needs docling + cached models)")
+    ap.add_argument("--artifacts", help="Docling models folder (default ~/.cache/docling/models)")
     a = ap.parse_args(argv)
     defaults, trustees = load_trustees()
 
     if a.dump:
         import statistics as st
-        from .collateral import page_tables
+        from .croptable import group_rows, page_crop_tables
         from .pdfpage import phrases, to_num
         doc = pymupdf.open(a.pdfs[0])
         layout, cfg = pick_config(doc, defaults, trustees, a.trustee)
@@ -153,8 +166,9 @@ def main(argv=None):
         for n in [int(x) for x in a.dump.split(",")]:
             page = doc[n - 1]
             print(f"\n================ page {n}  (layout {layout})")
-            for k, df in enumerate(page_tables(page, cfg)):
-                print(f"--- table {k + 1}: {df.shape[0]} rows x {df.shape[1]} cols")
+            for k, (rect, raw) in enumerate(page_crop_tables(page)):
+                df = group_rows(raw)
+                print(f"--- crop {k + 1} {[round(v) for v in rect]}: {df.shape[0]} rows x {df.shape[1]} cols")
                 print(df.head(8).to_string(max_colwidth=28))
             words = page_model(page)[0]
             lh = st.median(w["y1"] - w["y0"] for w in words) if words else 8
@@ -184,6 +198,10 @@ def main(argv=None):
                 print(f"  balance candidate: {c}")
         return
 
+    xl = None
+    if a.fallback:
+        from .fallback import XLarge
+        xl = XLarge(a.artifacts)
     results = []
     if a.period:
         from .sources import plan
@@ -191,18 +209,20 @@ def main(argv=None):
             if not job["pdf"]:
                 print(f"MISSING  {job['deal']}  ({job['trustee']}): no report for {a.period}")
                 continue
-            r = process(job["pdf"], defaults, trustees, job)
+            r = process(job["pdf"], defaults, trustees, job, xl)
             print({k: r[0][k] for k in ("deal", "layout", "report_type", "tests", "collateral_rows",
                                          "needs_attention", "seconds")})
             results.append(r)
     else:
         for pdf in a.pdfs:
-            r = process(pdf, defaults, trustees)
+            r = process(pdf, defaults, trustees, None, xl)
             print({k: r[0][k] for k in ("pdf", "deal", "layout", "tests", "collateral_rows",
                                          "needs_attention", "seconds")})
             results.append(r)
     if results:
         root = write_outputs(results, Path(a.out), a.period or "")
+        if xl is not None:
+            print(f"XLarge fallback: {xl.calls} crops, {xl.seconds:.0f} s")
         print(f"\noutput: {root.resolve()}")
 
 

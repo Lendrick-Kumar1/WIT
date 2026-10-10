@@ -366,7 +366,19 @@ def build_table(region: Region, data_row=None):
     # Columns come from the DATA rows. Header words often sit closer together than the data
     # under them ("LoanX ID" | "Moody's Rating"), so letting the header block a gutter merges
     # two real columns. Header rows only ADD columns afterwards (empty-column rescue below).
-    n_hdr0 = next((i for i, r in enumerate(rows) if is_data(r["ws"])), 0)
+    def _drop_prefix(n):
+        """A CENTRED first cell puts a text line just above the first data row ("Auris
+        Luxembourg" / <row> / "III S.A.R.L."). It is not header: it sits much closer to the data
+        row below than to the header line above."""
+        while 2 <= n < len(rows):
+            gap_dn = rows[n]["c"] - rows[n - 1]["c"]
+            gap_up = rows[n - 1]["c"] - rows[n - 2]["c"]
+            if gap_dn < lh and gap_dn < 0.5 * gap_up:
+                n -= 1
+            else:
+                break
+        return n
+    n_hdr0 = _drop_prefix(next((i for i, r in enumerate(rows) if is_data(r["ws"])), 0))
     hdr_rows0 = rows[:n_hdr0]
     body_rows = [r for r in grows if r not in hdr_rows0]
     if len(body_rows) >= 2 and hdr_rows0:
@@ -431,7 +443,7 @@ def build_table(region: Region, data_row=None):
         return cells
 
     # 2) HEADER: the rows above the first row that contains a digit
-    n_hdr = next((i for i, r in enumerate(rows) if is_data(r["ws"])), len(rows))
+    n_hdr = _drop_prefix(next((i for i, r in enumerate(rows) if is_data(r["ws"])), len(rows)))
     if n_hdr == len(rows) and ncol < 3 and len(rows) > 2:
         n_hdr = 0          # digit-free block with 1-2 columns = plain text, not a header
     header = [""] * ncol
@@ -544,8 +556,68 @@ def build_table(region: Region, data_row=None):
     anchors = [k for k in range(ncol) if fill_rate[k] >= 0.6]
     steps = [b["c"] - a["c"] for (a, _), (b, _) in zip(all_cells, all_cells[1:])]
     normal_step = st.median(steps) if steps else 2 * lh
+    # CENTRED cells: some reports centre a 2-3 line cell vertically on its row, so text lines sit
+    # both ABOVE and below the line that holds the amounts:
+    #       United Kingdom          <- belongs to the row BELOW
+    #   OAT BIDCO LTD ... LX248915 ... 2,204,545.45
+    #       (Great Britain)         <- belongs to the row above
+    # A table is treated as centred only if it shows that signature: some full row has a
+    # text-only line directly above AND below it at the same distance. Then every text-only line
+    # between two full rows goes to the NEARER one. Otherwise (top-aligned cells, the usual case)
+    # nothing changes: wrapped lines are glued to the row above, as before.
+    # Anchor columns are measured on lines that hold digits (in centred layouts half the lines
+    # are text-only, which would hide them).
+    digit_cells = [c for r, c in all_cells if any(ch.isdigit() for w in r["ws"] for ch in w["t"])]
+    anchors_c = [k for k in range(ncol)
+                 if digit_cells and sum(bool(c[k]) for c in digit_cells) / len(digit_cells) >= 0.6]
+
+    def is_full(cells):
+        return bool(anchors_c) and sum(bool(cells[k]) for k in anchors_c) > 0.3 * len(anchors_c)
+
+    # money amounts (1,234.56 / 405,104,536.31 / 0.00), not percentages or years inside a name
+    # ("VMDTEF 3.25%", "2024 Additional Term Facility")
+    amount = re.compile(r"^\(?-?\d{1,3}(,\d{3})+(\.\d+)?\)?$|^\(?-?\d+\.\d{2}\)?$")
+
+    def text_only(r, cells):
+        """a partial line of text, no money amounts"""
+        filled = sum(bool(c) for c in cells)
+        return 0 < filled <= max(2, 0.35 * ncol) and not is_full(cells) and len(anchors_c) >= 2 and \
+            not any(amount.match(w["t"].strip("€$£")) for w in r["ws"])
+    kinds = ["full" if is_full(c) else ("text" if text_only(r, c) else "other") for r, c in all_cells]
+    centred = any(kinds[j] == "full" and kinds[j - 1] == "text" and kinds[j + 1] == "text"
+                  and abs((all_cells[j][0]["c"] - all_cells[j - 1][0]["c"])
+                          - (all_cells[j + 1][0]["c"] - all_cells[j][0]["c"])) <= 0.6
+                  and all_cells[j][0]["c"] - all_cells[j - 1][0]["c"] < 0.8 * lh
+                  for j in range(1, len(all_cells) - 1))
+    prefix_of, suffix_ok = {}, set()            # line -> row it starts ; lines glued to the row above
+    if centred:
+        fulls = [j for j, k in enumerate(kinds) if k == "full"]
+        for j, k in enumerate(kinds):
+            if k != "text":
+                continue
+            prv = next((f for f in reversed(fulls) if f < j), None)
+            nxt = next((f for f in fulls if f > j), None)
+            if any(kinds[m] == "other" for m in range((prv if prv is not None else -1) + 1,
+                                                       nxt if nxt is not None else len(kinds))):
+                continue                         # a section label / subtotal in between: leave it
+            d_p = all_cells[j][0]["c"] - all_cells[prv][0]["c"] if prv is not None else float("inf")
+            d_n = all_cells[nxt][0]["c"] - all_cells[j][0]["c"] if nxt is not None else float("inf")
+            if d_n + 0.5 < d_p:
+                prefix_of[j] = nxt
+            elif prv is not None:
+                suffix_ok.add(j)
+    pending = {}                                         # row index -> prefix cells waiting
+    for j, nxt in prefix_of.items():
+        cells = all_cells[j][1]
+        old_p = pending.get(nxt)
+        pending[nxt] = cells if old_p is None else [(a + " " + b).strip() for a, b in zip(old_p, cells)]
+
     body, prev_c = [], None
-    for r, cells in all_cells:
+    for j, (r, cells) in enumerate(all_cells):
+        if j in prefix_of:
+            continue
+        if j in pending:
+            cells = [(a + " " + b).strip() for a, b in zip(pending[j], cells)]
         filled = sum(bool(c) for c in cells)
         tight = prev_c is not None and r["c"] - prev_c <= 1.25 * normal_step
         filled_anchors = sum(bool(cells[k]) for k in anchors)
@@ -554,7 +626,17 @@ def build_table(region: Region, data_row=None):
                      and filled_anchors <= 0.3 * len(anchors))
         old_rule = not has_digit(r["ws"]) and filled <= max(1, 0.3 * ncol) and prev_c is not None \
             and r["c"] - prev_c < 1.6 * lh
-        if body and ((no_anchor and tight and len(anchors) >= 2) or old_rule):
+        # a lone first-column label never continues a row whose first cell is empty: that row is a
+        # subtotal line ("Loan Subtotal: 308,024,961.92") and the label starts a new section ("Bond")
+        if re.search(r"\b(sub-?)?totals?\b", " ".join(w["t"] for w in r["ws"]), re.I):
+            body.append(cells)               # "Total Balance: 354,184,667.25" is its own row, never
+            prev_c = r["c"]                  # the wrapped tail of the last security
+            continue
+        if only_first and body and not body[-1][0]:
+            body.append(cells)
+            prev_c = r["c"]
+            continue
+        if body and ((no_anchor and tight and len(anchors) >= 2) or old_rule or j in suffix_ok):
             body[-1] = [(p + " " + c).strip() for p, c in zip(body[-1], cells)]
             prev_c = r["c"]
             continue

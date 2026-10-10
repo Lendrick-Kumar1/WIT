@@ -88,3 +88,9 @@ poetry run python tools/crop_test.py probs/*.pdf --engine old --no-docling   # t
 poetry run python tools/crop_test.py probs/*.pdf --no-full         # XLarge on crops only (skips the slow full pages)
 ```
 `summary.xlsx` now has a **checks** column ("3 ok, 1 check"). Each table has `_row` and `_check`.
+
+## v3_8 additions
+- `summary.xlsx` has a second sheet **stitched_checks**: tables that run over a page break are
+  joined (last table on a page + first table on the next page, same columns) and every subtotal /
+  total is checked against ALL its rows. sparse_structure: 24 / 24 industry groups ok.
+- Title and footer are measured per page (no fixed 12% / 93% lines).

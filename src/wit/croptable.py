@@ -18,16 +18,21 @@ Nothing is invented: copied-down values come from the group's own first row on t
 import re
 
 from . import geometry as G
+from .crops import find_crops
 from .pdfpage import page_model
 
 NUMBER = re.compile(r"^\(?-?[\d,]*\.?\d+%?\)?$")       # 1,234.50  (5.2)  4.19%  57   (no dates)
-TOTAL = re.compile(r"^(sub-?)?totals?\b", re.I)          # "Total", "Totals:", "Total for B:", "Subtotal"
+TOTAL = re.compile(r"\b(sub-?)?totals?\b", re.I)   # "Total", "Totals:", "Total for B:", "Bond Subtotal:"
+
+
+DATE = re.compile(r"^\d{1,4}[/.-]\d{1,2}[/.-]\d{1,4}$|^\d{1,2}[- ][A-Za-z]{3}[- ]\d{2,4}$")
 
 
 def is_data_row(ws):
-    """Data = the row holds a real number, or it is a 'Label: value' pair (key-value boxes).
-    Header lines with dates only ("Current 5/2/2024 | Prior 4/3/2024") are NOT data."""
-    if any(NUMBER.match(w["t"]) for w in ws):
+    """Data = the row has a digit that is not part of a date (amounts, IDs like LX183461), or it
+    is a 'Label: value' pair (key-value boxes). Header lines whose only digits are dates
+    ("Current 5/2/2024 | Prior 4/3/2024") are NOT data."""
+    if any(any(ch.isdigit() for ch in w["t"]) and not DATE.match(w["t"]) for w in ws):
         return True
     return any(w["t"].endswith(":") for w in ws[:-1]) and not ws[-1]["t"].endswith(":")
 
@@ -38,6 +43,23 @@ def crop_words(page):
     W, Ht = page.rect.width, page.rect.height
     inside = [w for w in words if 0 <= (w["x0"] + w["x1"]) / 2 <= W and 0 <= (w["y0"] + w["y1"]) / 2 <= Ht]
     return inside, H, V
+
+
+def page_crop_tables(page, footer_band=None, min_words=3):
+    """Every crop of a page read as ONE raw table (geometry.build_table output, before
+    group_rows). Returns [(crop_rect, DataFrame)]. Uses the page's own words; nothing is written."""
+    words, _, _ = page_model(page)
+    out = []
+    for rect in find_crops(page, footer_band=footer_band):
+        ws = [w for w in words if rect.x0 <= (w["x0"] + w["x1"]) / 2 <= rect.x1
+              and rect.y0 <= (w["y0"] + w["y1"]) / 2 <= rect.y1]
+        if len(ws) < min_words:
+            continue
+        r = G.Region(page=page.number + 1, words=ws, bbox=G.bbox(ws))
+        G.build_table(r, data_row=is_data_row)
+        if r.df is not None and len(r.df) and r.df.shape[1] >= 2:
+            out.append((rect, r.df))
+    return out
 
 
 def _num(v):
@@ -86,7 +108,7 @@ def group_rows(df):
         if not any(is_num(row[c]) for c in cols):
             return False
         texts = [row[c].strip() for c in text_cols if row[c].strip() and not is_num(row[c])]
-        return not texts or (len(texts) == 1 and bool(TOTAL.match(texts[0])))
+        return not texts or (len(texts) == 1 and bool(TOTAL.search(texts[0])))
 
     # 1) merge "<label>" + "<amounts>" lines into one subtotal row
     rows, kinds, i = [], [], 0
@@ -123,12 +145,19 @@ def group_rows(df):
     # 3) walk the rows: copy group values down, check every subtotal/total
     num_cols = [c for c in cols if c not in text_cols]
     current, members, all_members = None, [], []
+    has_sec = "_section" in out and not group_cols and out["_section"].str.strip().any()
+    sec_members = {}                 # section label ("Loan", "Bond") -> its detail rows so far
     for k in range(len(out)):
         row = out.loc[k]
+        if out.at[k, "_row"] == "detail" and has_sec:
+            sec_members.setdefault(row["_section"], []).append(k)
         if out.at[k, "_row"] == "detail":
             if group_cols and row[group_cols[0]].strip():
-                current = {c: row[c] for c in group_cols}
-                members = []
+                same = current is not None and \
+                    " ".join(row[group_cols[0]].split()) == " ".join(current[group_cols[0]].split())
+                if not same:                     # a group repeated at the top of a new page continues
+                    current = {c: row[c] for c in group_cols}
+                    members = []
             elif group_cols and current:
                 for c in group_cols:
                     if not out.at[k, c].strip():
@@ -141,12 +170,18 @@ def group_rows(df):
         is_sub = carried or (bool(group_cols) and current is not None and
                              (not row[first].strip() or row[first].strip() == current[group_cols[0]].strip()))
         rows_k = members if (is_sub and not carried) else ([] if carried else all_members)
+        # sections ("Loan" ... "Loan Subtotal:", "Bond" ... "Bond Subtotal:", then "Total:")
+        label_txt = " ".join(row[c] for c in cols if row[c].strip() and not is_num(row[c])).lower()
+        sec = row["_section"].strip() if has_sec else ""
+        sec_sub = has_sec and sec and ("subtotal" in label_txt or sec.lower() in label_txt)
+        if sec_sub:
+            is_sub, rows_k = True, sec_members.get(row["_section"], [])
         out.at[k, "_row"] = "subtotal" if is_sub else "total"
         if carried and not row[first].strip() and "_section" in out and out.at[k, "_section"].strip():
             out.at[k, first] = out.at[k, "_section"]      # its label sat above, as a 'section' line
         elif is_sub and not row[first].strip() and current:
             out.at[k, first] = current[group_cols[0]]
-        labelled = any(TOTAL.match(row[c].strip()) for c in text_cols if row[c].strip())
+        labelled = bool(TOTAL.search(label_txt))
         if not rows_k:
             if labelled:                 # "Total Number of Upgrades | 4": a reported figure, not a sum
                 out.at[k, "_row"] = "detail"
@@ -178,7 +213,9 @@ def group_rows(df):
             out.at[k, "_check"] = "check: " + "; ".join(problems) + " (rows may start on an earlier page)"
         else:
             out.at[k, "_check"] = "check: " + "; ".join(problems)
-        if is_sub:
+        if sec_sub:
+            sec_members[row["_section"]] = []
+        elif is_sub:
             members, current = [], None
         else:
             all_members = []

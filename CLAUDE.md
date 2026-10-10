@@ -20,21 +20,22 @@ Born-digital trustee PDFs → 3 Excel outputs (Balance, Performance, Collateral)
 - All trustee differences live in `config/trustees/<name>.yaml`. No `if trustee ==` in code. No coordinates.
 - Always use `pdfpage.page_model()` for text: it fixes `/Rotate 90` and treats thin images as separators.
 
-## Current step (after the crop test)
-Crop test result (XLarge on crops vs PyMuPDF): crops fix XLarge's segmentation errors, but XLarge
-misses small crops (key-value boxes, 1-row tables) and takes 3-16 s per crop. PyMuPDF reading
-**one crop = one table** (`src/wit/croptable.py`) matched or beat it on every crop.
-- `crops.find_crops(page)` -> crop rects; `croptable.read_crop(crop_page)` -> one DataFrame with
-  `_row` (detail|subtotal|total) and `_check` (ok | check: ...).
-- Grouped tables: group columns copied down, "<group>" + "<amount>" lines = one subtotal row,
-  every subtotal/total checked against the sum of its rows.
-- Not yet wired into the main pipeline (`run.py`). Next: use crops + read_crop for Collateral,
-  stitch groups/totals across pages (clears the "rows may start on an earlier page" flags),
-  then XLarge only for crops whose checks fail.
+## Current state (v3_8)
+- Collateral = crops (`crops.find_crops`, title/footer measured) -> one table per crop
+  (`croptable.page_crop_tables`, `group_rows`) -> tables stitched across consecutive pages
+  (`collateral._stitch`) -> header mapping -> join on ID. Each column comes from the table whose
+  header names it most directly (`collateral.header_rank`).
+- Every subtotal / total is checked against its rows -> `_run_report.xlsx` sheet `collateral_sums`.
+  A failing check means rows were lost / merged: investigate, don't hide it.
+- `--fallback`: XLarge (`fallback.py`) only for crops with IDs < 50% or failing sums; its table is
+  used only if it passes where PyMuPDF failed (sheet `xlarge_fallback`).
+- Regression: compare Collateral cell by cell **keyed on loan id** (row order can change).
 
 ## Commands
 - `python demo/make_demo.py` (builds `demo/` from `reports/`), then `python run.py --period 2026-08`
-- `python run.py some.pdf` (ad-hoc), `python run.py some.pdf --debug 3,5` (per page)
+- `python run.py some.pdf` (ad-hoc), `python run.py some.pdf --debug 3,5` (per page),
+  `--dump 3` (every crop table on page 3), `--fallback` (XLarge for failing crops)
+- `python tools/crop_test.py probs/*.pdf --no-docling` (crops + per-crop and cross-page checks)
 
 ## Working rules
 - After every change, re-run all samples and compare with HANDOVER §5. No count may go down.

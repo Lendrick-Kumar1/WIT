@@ -28,7 +28,8 @@ import pymupdf
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from wit import geometry as G                          # noqa: E402
 from wit.crops import find_crops, preview_png, write_crop_pdf  # noqa: E402
-from wit.croptable import read_crop                    # noqa: E402
+from wit.collateral import _stitch                     # noqa: E402
+from wit.croptable import group_rows, page_crop_tables, read_crop  # noqa: E402
 from wit.pdfpage import page_model                     # noqa: E402
 
 
@@ -117,10 +118,21 @@ def main():
         conv = make_converter(a.artifacts)
 
     out_root = Path(a.out)
-    rows = []
+    rows, stitched = [], []
     for pdf in a.pdfs:
         doc = pymupdf.open(pdf)
         pages = [int(x) for x in a.pages.split(",")] if a.pages else range(1, len(doc) + 1)
+        # tables that run over a page break, stitched (same columns on consecutive pages), then
+        # every subtotal / total checked against ALL its rows
+        parts = [(p - 1, raw.assign(_page=p)) for p in pages for _, raw in page_crop_tables(doc[p - 1])]
+        for pg, df in _stitch(parts):
+            g = group_rows(df)
+            if len(pg) < 2 or "_row" not in g:
+                continue
+            for _, r in g[g["_row"] != "detail"].iterrows():
+                stitched.append(dict(pdf=Path(pdf).name, pages=f"{pg[0] + 1}-{pg[-1] + 1}",
+                                     row=r["_row"], label=next((v for v in r if str(v).strip()), "")[:50],
+                                     check=r["_check"] or "not checked"))
         for p in pages:
             d = out_root / Path(pdf).stem / f"p{p}"
             d.mkdir(parents=True, exist_ok=True)
@@ -163,7 +175,13 @@ def main():
     out_root.mkdir(parents=True, exist_ok=True)
     summ = pd.DataFrame(rows)
     summ["correct? (fill in)"] = ""
-    summ.to_excel(out_root / "summary.xlsx", index=False)
+    with pd.ExcelWriter(out_root / "summary.xlsx") as xw:
+        summ.to_excel(xw, sheet_name="summary", index=False)
+        pd.DataFrame(stitched).to_excel(xw, sheet_name="stitched_checks", index=False)
+    if stitched:
+        st_df = pd.DataFrame(stitched)
+        print("\nacross pages:", (st_df["check"] == "ok").sum(), "ok,",
+              st_df["check"].str.startswith("check").sum(), "to check  (sheet stitched_checks)")
     print(f"\nsummary: {(out_root / 'summary.xlsx').resolve()}")
 
 

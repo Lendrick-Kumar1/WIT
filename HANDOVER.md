@@ -45,23 +45,44 @@ reports root     ->  <deal folder>/<Monthly|Quarterly|Intra Trustee Report>/<202
 ```
 So **deal name, trustee and report month come from metadata**, which is reliable. The trustee from the deal list selects the config. If a trustee has more than one layout (US Bank A/B, BNY A/B), the `detect:` patterns pick between them.
 
-## 5. Results on your 7 samples (one run, demo folder tree)
+## 5. Results on your 7 samples (one run, demo folder tree, v3_8)
 
-| Deal | Config | Tests | Tests flagged | Collateral rows | Time |
+| Deal | Config | Tests | Collateral rows | Sums ok / to check | Time |
 |---|---|---|---|---|---|
-| Capital Four CLO I | bny_mellon_a | 78 | 0 | 140 | 2.1 s |
-| Providus CLO VII | bny_mellon_a | 76 | 0 | 204 | 3.0 s |
-| Providus CLO II (from the *Quarterly* folder) | bny_mellon_b | 63 | 0 | 158 | 2.7 s |
-| Arini European CLO I | citi | 18 | 0 | 192 | 4.3 s |
-| Anchorage CLO 5 (+ your problem PDF: 18/18 correct) | us_bank_a | 62 | 0 | 123 | 2.8 s |
-| Segovia CLO 3 | us_bank_a | 16 | 0 | 170 | 1.5 s |
-| Carlyle Euro 2013-1 | us_bank_b | 58 | 27 (the PDF prints "-") | 69 | 1.7 s |
+| Capital Four CLO I | bny_mellon_a | 78 | 140 | 7 / 0 | 2.8 s |
+| Providus CLO VII | bny_mellon_a | 76 | 204 | 6 / 1 | 3.9 s |
+| Providus CLO II (from the *Quarterly* folder) | bny_mellon_b | 63 | 158 | 2 / 0 | 1.3 s |
+| Arini European CLO I | citi | 18 | 192 | 0 / 0 | 4.2 s |
+| Anchorage CLO 5 | us_bank_a | 62 | 123 | 1 / 0 | 2.8 s |
+| Segovia CLO 3 | us_bank_a | 16 | 170 | 1 / 0 | 1.5 s |
 | Example Wilmington | (no report) | MISSING reported | | | |
+
+"Sums ok" = subtotals / totals printed in the collateral tables that equal the sum of the rows
+read (sheet `collateral_sums` in `_run_report.xlsx`). A total that matches proves no security
+row was lost or merged on those pages.
 
 **Status:**
 - **Performance:** solid.
 - **Balance:** the mechanism works, but the labels are placeholders.
-- **Collateral:** rows and IDs are right, but only 6–15 of the 29 columns fill. The rest needs page key terms and header synonyms from your legacy repo.
+- **Collateral:** rows, IDs and principal balances verified by the sum checks; only 6-15 of the 29
+  columns fill. The rest needs page key terms and header synonyms from your legacy repo.
+
+### v3_8: what changed in Collateral (same deals, compared cell by cell with v3_7)
+- **Reader:** every collateral page is cut into crops (one table each) and the same table is
+  stitched across consecutive pages before reading groups, sections and totals.
+- **Principal balance was wrong for 62 securities before** (Capital Four, Providus VII, Arini,
+  Anchorage): it came from tables that split one security into lots (interest accrual: 445,979.01 +
+  863,180.89 instead of 1,309,159.90) or from *Par Amount* next to *Principal Balance*. Now: rows
+  come from the table with the most distinct securities, and each column from the table whose
+  header names it most directly.
+- **Centred cells** (Arini: "United Kingdom" / row / "(Great Britain)") are now read whole.
+- **Last row of a page** is no longer cut by a fixed footer line; title and footer are measured.
+- **Filled:** 923 previously empty cells (S&P / Fitch ratings, countries, industries).
+- **Known, by design:** Providus II `issuer` now shows the asset table's *Security* text
+  ("Solera LLC - Euro Term Loan"), because every Providus II table labels that column *Security*.
+  Splitting issuer from facility is a business rule to add later (legacy repo).
+- **Optional XLarge fallback** (`--fallback`) for crops whose IDs or sums fail; off by default.
+- `collateral.reader: regions` in `config/defaults.yaml` switches back to the older reader.
 
 ## 6. Folder map
 ```
@@ -79,6 +100,7 @@ WIT/
 │   ├── performance.py, balance.py, collateral.py, geometry.py
 │   ├── crops.py                  page -> one crop per table (section bars, vertical rules)
 │   ├── croptable.py              crop -> ONE table: grouped rows, subtotals, sum checks
+│   ├── fallback.py               XLarge on one crop (only with --fallback)
 │   └── run.py                    orchestration, statuses, Excel outputs
 ├── demo/make_demo.py             builds an org-style demo tree from reports/
 └── out/<period>/<Deal>/{Balance,Performance,Collateral}.xlsx  +  out/<period>/_run_report.xlsx

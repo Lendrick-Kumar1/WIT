@@ -48,6 +48,7 @@ balance:
     ccc balance:       ["<<PLACEHOLDER>>"]
 
 collateral:
+  reader: crops          # crops = one table per crop, stitched across pages (default) | regions = older reader
   min_mapped_fields: 3
   id_patterns: ["LX\\d{6}", "[A-Z]{2}[A-Z0-9]{9}\\d", "BBG[A-Z0-9]{9}", "[A-Z0-9]{9}"]   # LoanX, ISIN, FIGI, CUSIP
   # header text -> schema column. ORDER MATTERS: specific patterns before generic ones.
