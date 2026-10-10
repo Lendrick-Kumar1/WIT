@@ -1,0 +1,16 @@
+# U.S. Bank, layout A (e.g. Anchorage, Segovia): Executive Summary dashboard, pages stored /Rotate 90,
+# band separators are gradient IMAGES (handled generically by pdfpage.page_model).
+names: "U\\.?S\\.? ?Bank"          # matches the Trustee column of the deal list
+detect:
+  all: ["usbank\\.com|U\\.S\\. Bank"]
+  any: ["Executive Summary", "Next Payment:"]
+pages:
+  performance: ["Executive Summary", "Par Value Test", "Interest Coverage", "Portfolio Profile Tests"]
+  balance:     ["Executive Summary", "Par Value Tests"]
+  collateral:  ["Detail of Assets", "Detail of Ratings", "Detail of Industries", "Fitch Recovery Rate Details"]
+balance:
+  labels:
+    principal balance: ["aggregate principal balance", "^principal amount:?$"]
+    default balance:   ["principal balance of defaulted"]
+    proceeds balance:  ["^principal proceeds$"]
+    ccc balance:       ["<<PLACEHOLDER: label from legacy repo>>"]

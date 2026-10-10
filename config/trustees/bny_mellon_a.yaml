@@ -1,0 +1,14 @@
+# BNY Mellon, layout A (e.g. Capital Four, Providus VII): serif headings, zebra rows.
+names: "BNY|Bank of New York"          # matches the Trustee column of the deal list
+detect:
+  any: ["bny ?mellon|bnymellon", "Client Service Manager", "Compliance Summary"]
+pages:
+  performance: ["Compliance Tests", "Par Value Tests", "Interest Coverage Tests"]
+  balance:     ["Compliance Summary", "Par Value Tests"]
+  collateral:  ["Asset Information I\\b", "Asset Information II\\b", "Ratings and Recovery Detail", "Interest Accrual Detail"]
+balance:
+  labels:
+    principal balance: ["aggregate principal balance"]
+    default balance:   ["defaulted obligations"]
+    proceeds balance:  ["^principal proceeds$"]
+    ccc balance:       ["<<PLACEHOLDER>>"]

@@ -21,3 +21,7 @@ models/
 *.pt
 *.onnx
 *.safetensors
+out/
+demo/reports/
+demo/active_deals.xlsx
+__pycache__/

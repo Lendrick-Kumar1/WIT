@@ -1,0 +1,88 @@
+# defaults.yaml: generic vocabulary shared by ALL trustees.
+# A trustee file (config/trustees/<name>.yaml) overrides any key below.
+# Everything is TEXT (regex, case-insensitive). There are no coordinates anywhere.
+
+asset_class: CLO
+
+layout:
+  title_band: 0.2        # top share of the page that holds the section title
+  footer_band: 0.93      # bottom share treated as footer (ignored for tables)
+  table_top: 0.1         # collateral tables: ignore text above this share of the page (logo/title)
+
+# Which pages feed which output. Empty list = scan every page (~30 ms/page).
+# Put your legacy key terms here, or override per trustee.
+pages:
+  match_on: title        # title | text
+  performance: []
+  balance: []
+  collateral: []
+
+deal:
+  deal_name: "\\bCLO\\b"
+  deal_name_stop: "\\s+(?:Monthly|As of|LEI)\\b"
+  report_month: "as of(?: date)?\\s*:?\\s*([0-9]{1,2}[/-][0-9A-Za-z]{1,3}[/-][0-9]{2,4}|[A-Z][a-z]+ \\d{1,2}, \\d{4})"
+
+performance:
+  header_roles:          # header text -> schema column; checked in this order, first match wins
+    skip:    "numerator|denominator|amount|cushion|headroom|calculation|formula|^(test )?number$|max ?/ ?min|maximum ?/ ?minimum"
+    test:    "test name|test description|description|limitation|clause|^test$"
+    trigger: "threshold|trigger|required|requirement|target|^min$|^max$|minimum|maximum|limit$"
+    result:  "result|pass/fail"
+    prior:   "prior|previous"          # recognised so it is NOT taken as 'current'
+    current: "current|ratio|actual|outcome|value|percentage"
+    test2:   "test"                    # generic fallback for the name column
+  categories:            # section label / page title -> output 'original tests'
+    "Coverage test":            "coverage|par value|interest coverage|overcollateral"
+    "Collateral Quality":       "collateral quality|quality test"
+    "Concentration limitation": "concentration|portfolio profile|limitation"
+  test_name_categories:  # fallback: classify by the test name itself
+    "Coverage test":            "par value|interest coverage|overcollateral|event of default|reinvestment"
+    "Collateral Quality":       "diversity|rating factor|recovery|spread|coupon|life|warf|monitor"
+    "Concentration limitation": "^\\([a-z]{1,3}\\)|obligor|industry|country|obligations$|loans$|bonds$|securities$"
+
+balance:
+  labels:                # PLACEHOLDERS: real labels come from the legacy repo, per trustee
+    principal balance: ["aggregate principal balance"]
+    default balance:   ["principal balance of defaulted"]
+    proceeds balance:  ["^principal proceeds$"]
+    ccc balance:       ["<<PLACEHOLDER>>"]
+
+collateral:
+  min_mapped_fields: 3   # a table must map at least this many schema columns (incl. loan id)
+  # header text -> schema column. ORDER MATTERS: specific patterns before generic ones.
+  columns:
+    loan id:                 "lxid|loanx|loan ?x|security id|isin|figi|cusip|asset id|identifier"
+    rec_rate_moody:          "moody.*recovery"
+    rec_rate_sp:             "(s&p|s & p).*recovery"
+    rtg_watch_mdy:           "moody.*watch"
+    rtg_watch_sp:            "(s&p|s & p).*watch"
+    rtg_watch_fitch:         "fitch.*watch"
+    rtg_watch_dbrs:          "dbrs.*watch"
+    dbrsm_ind_code:          "dbrs.*industry.*code"
+    dbrsm_ind:               "dbrs.*industry"
+    dbrs_ce:                 "dbrs.*(ce|credit estimate)"
+    moody's rating:          "moody.*rating|^moody's$"
+    s&p rating:              "(s&p|s & p).*rating|^s&p$"
+    fitch rating:            "fitch.*rating|^fitch$"
+    dbrs rating:             "dbrs.*rating"
+    industry classification: "industry"
+    country_code:            "country"
+    seniority:               "seniority|lien|security type|asset type"
+    cov_lite:                "cov.?lite"
+    defaulted:               "defaulted|default flag"
+    coupon type:             "rate option|coupon type|fixed/float|rate type|interest type"
+    current coupon:          "all.?in rate|current coupon|^coupon|interest rate|effective rate"
+    current spread:          "spread|margin"
+    libor:                   "libor|euribor|base rate|index rate"
+    maturity date:           "maturity"
+    unfunded:                "unfunded"
+    principal balance:       "principal balance|par amount|par value|par/quantity|principal amount|current balance"
+    payment period:          "frequency|payment period|pay freq"
+    issue:                   "facility|tranche|issue name|^issue$"
+    issuer:                  "issuer|obligor|borrower|description|security name|^security$|asset name"
+  numeric_columns: [current coupon, current spread, libor, principal balance, unfunded]
+  output_columns: [issuer, loan id, dbrsm_ind, country_code, seniority, cov_lite, defaulted, coupon type,
+                   current coupon, current spread, libor, maturity date, "moody's rating", s&p rating,
+                   fitch rating, dbrs rating, dbrs_ce, rec_rate_moody, rec_rate_sp, rtg_watch_mdy,
+                   rtg_watch_sp, rtg_watch_fitch, rtg_watch_dbrs, principal balance, unfunded,
+                   dbrsm_ind_code, payment period, issue, industry classification, report_month, deal name]

@@ -1,0 +1,15 @@
+# U.S. Bank, layout B (e.g. Carlyle Euro): boxed sections, "As of Date:" header.
+names: "U\\.?S\\.? ?Bank"          # matches the Trustee column of the deal list
+detect:
+  all: ["usbank\\.com|U\\.S\\. Bank"]
+  any: ["As of Date:", "^Payment Date:"]
+pages:
+  performance: ["Summary As of", "Par Value Tests Detail", "Interest Coverage Tests Detail", "Portfolio Profile Test"]
+  balance:     ["Summary As of", "Par Value Tests Detail"]
+  collateral:  ["Current Asset Characteristics", "Rating Detail"]
+balance:
+  labels:
+    principal balance: ["<<PLACEHOLDER>>"]
+    default balance:   ["<<PLACEHOLDER>>"]
+    proceeds balance:  ["<<PLACEHOLDER>>"]
+    ccc balance:       ["<<PLACEHOLDER>>"]

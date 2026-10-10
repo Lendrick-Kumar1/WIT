@@ -1,0 +1,14 @@
+# BNY Mellon, layout B (e.g. Providus II): whitespace-only tables, landscape A4.
+names: "BNY|Bank of New York"          # matches the Trustee column of the deal list
+detect:
+  any: ["bny ?mellon|bnymellon", "Investor Report", "Notes and Asset Summary Information"]
+pages:
+  performance: ["Compliance Tests", "Interest Coverage Tests", "Par Value Tests"]
+  balance:     ["Notes and Asset Summary", "Par Value Tests"]
+  collateral:  ["Asset Information I\\b", "Asset Information II\\b", "Ratings and Recovery Detail"]
+balance:
+  labels:
+    principal balance: ["<<PLACEHOLDER>>"]
+    default balance:   ["<<PLACEHOLDER>>"]
+    proceeds balance:  ["<<PLACEHOLDER>>"]
+    ccc balance:       ["<<PLACEHOLDER>>"]
