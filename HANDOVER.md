@@ -49,9 +49,9 @@ So **deal name, trustee and report month come from metadata**, which is reliable
 
 | Deal | Config | Tests | Tests flagged | Collateral rows | Time |
 |---|---|---|---|---|---|
-| Capital Four CLO I | bny_mellon_a | 78 | 0 | 143 | 2.1 s |
-| Providus CLO VII | bny_mellon_a | 76 | 0 | 210 | 3.0 s |
-| Providus CLO II (from the *Quarterly* folder) | bny_mellon_b | 63 | 0 | 161 | 2.7 s |
+| Capital Four CLO I | bny_mellon_a | 78 | 0 | 140 | 2.1 s |
+| Providus CLO VII | bny_mellon_a | 76 | 0 | 204 | 3.0 s |
+| Providus CLO II (from the *Quarterly* folder) | bny_mellon_b | 63 | 0 | 158 | 2.7 s |
 | Arini European CLO I | citi | 18 | 0 | 192 | 4.3 s |
 | Anchorage CLO 5 (+ your problem PDF: 18/18 correct) | us_bank_a | 62 | 0 | 123 | 2.8 s |
 | Segovia CLO 3 | us_bank_a | 16 | 0 | 170 | 1.5 s |

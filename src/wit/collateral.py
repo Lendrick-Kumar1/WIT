@@ -32,6 +32,8 @@ def map_headers(headers, columns_cfg):
 
 
 def page_tables(page, cfg):
+    G.HEADER_VOCAB = [v for v in cfg.get("collateral", {}).get("columns", {}).values() if v] + \
+        [v for v in cfg.get("performance", {}).get("header_roles", {}).values() if v]
     lay = cfg.get("layout", {})
     words, H, V = page_model(page)
     h = page.rect.height
@@ -48,9 +50,20 @@ def page_tables(page, cfg):
     return out
 
 
-def norm_id(v):
-    s = re.sub(r"\s+", "", str(v or ""))
-    return s.upper() if re.fullmatch(r"[A-Za-z0-9]{6,14}", s) else ""
+ID_PATTERNS = [r"LX\d{6}", r"[A-Z]{2}[A-Z0-9]{9}\d", r"BBG[A-Z0-9]{9}", r"[A-Z0-9]{9}"]
+
+
+def norm_id(v, patterns=None):
+    """Pick the token that LOOKS like a security ID (LoanX, ISIN, FIGI, CUSIP), so text that
+    overflowed from a neighbouring column ('NEW B2D LX218697') doesn't pollute the key."""
+    s = str(v or "").upper()
+    toks = re.findall(r"[A-Z0-9]+", s)
+    for pat in patterns or ID_PATTERNS:
+        for tok in toks:
+            if re.fullmatch(pat, tok):
+                return tok
+    s = re.sub(r"\s+", "", s)
+    return s if re.fullmatch(r"[A-Z0-9]{6,14}", s) else ""
 
 
 def collateral(doc, page_idx, cfg, deal="", month=""):
@@ -63,7 +76,8 @@ def collateral(doc, page_idx, cfg, deal="", month=""):
             if ID_FIELD not in m.values() or len(m) < min_fields:
                 continue
             part = df[list(m)].rename(columns=m).copy()
-            part[ID_FIELD] = part[ID_FIELD].map(norm_id)
+            pats = cfg["collateral"].get("id_patterns")
+            part[ID_FIELD] = part[ID_FIELD].map(lambda v: norm_id(v, pats))
             part = part[part[ID_FIELD] != ""]
             if len(part):
                 part["_pages"] = str(i + 1)

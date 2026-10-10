@@ -138,8 +138,36 @@ def main(argv=None):
     ap.add_argument("--trustee", help="only deals whose trustee contains this text")
     ap.add_argument("--out", default="out")
     ap.add_argument("--debug", help="comma-separated page numbers: print per-page results")
+    ap.add_argument("--dump", help="comma-separated page numbers: print every table + label/value pair read")
     a = ap.parse_args(argv)
     defaults, trustees = load_trustees()
+
+    if a.dump:
+        import statistics as st
+        from .collateral import page_tables
+        from .pdfpage import phrases, to_num
+        doc = pymupdf.open(a.pdfs[0])
+        layout, cfg = pick_config(doc, defaults, trustees, a.trustee)
+        pd.set_option("display.width", 250)
+        pd.set_option("display.max_columns", 30)
+        for n in [int(x) for x in a.dump.split(",")]:
+            page = doc[n - 1]
+            print(f"\n================ page {n}  (layout {layout})")
+            for k, df in enumerate(page_tables(page, cfg)):
+                print(f"--- table {k + 1}: {df.shape[0]} rows x {df.shape[1]} cols")
+                print(df.head(8).to_string(max_colwidth=28))
+            words = page_model(page)[0]
+            lh = st.median(w["y1"] - w["y0"] for w in words) if words else 8
+            kv = []
+            for r in rows_of(words):
+                ps = phrases(r["ws"], lh * 0.9)
+                if len(ps) == 2 and to_num(ps[0]["t"]) is None and not any(c.isdigit() for c in ps[0]["t"][:1]):
+                    kv.append((ps[0]["t"], ps[1]["t"]))
+            if kv:
+                print("--- label : value pairs")
+                for k, v in kv:
+                    print(f"   {k[:55]:55s} : {v}")
+        return
 
     if a.debug:
         doc = pymupdf.open(a.pdfs[0])

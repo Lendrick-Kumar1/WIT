@@ -48,7 +48,8 @@ balance:
     ccc balance:       ["<<PLACEHOLDER>>"]
 
 collateral:
-  min_mapped_fields: 3   # a table must map at least this many schema columns (incl. loan id)
+  min_mapped_fields: 3
+  id_patterns: ["LX\\d{6}", "[A-Z]{2}[A-Z0-9]{9}\\d", "BBG[A-Z0-9]{9}", "[A-Z0-9]{9}"]   # LoanX, ISIN, FIGI, CUSIP
   # header text -> schema column. ORDER MATTERS: specific patterns before generic ones.
   columns:
     loan id:                 "lxid|loanx|loan ?x|security id|isin|figi|cusip|asset id|identifier"

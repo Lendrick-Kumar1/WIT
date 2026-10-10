@@ -37,6 +37,10 @@ from pathlib import Path
 import pandas as pd
 import pymupdf
 
+# header vocabulary (regexes from config: collateral columns + performance header roles);
+# set by the caller, used only to break ties when two header names touch each other
+HEADER_VOCAB: list = []
+
 # --------------------------------------------------------------------------------------
 # Small data structures
 # --------------------------------------------------------------------------------------
@@ -356,7 +360,44 @@ def build_table(region: Region):
     if len(grows) < 2:
         grows = rows
     tol = 0.12 if len(grows) >= 8 else 0.0
-    gut = find_gutters(grows, x0, x1, min_w=lh * 0.55, tolerance=tol)
+    # Columns come from the DATA rows. Header words often sit closer together than the data
+    # under them ("LoanX ID" | "Moody's Rating"), so letting the header block a gutter merges
+    # two real columns. Header rows only ADD columns afterwards (empty-column rescue below).
+    n_hdr0 = next((i for i, r in enumerate(rows) if has_digit(r["ws"])), 0)
+    hdr_rows0 = rows[:n_hdr0]
+    body_rows = [r for r in grows if r not in hdr_rows0]
+    if len(body_rows) >= 2 and hdr_rows0:
+        btol = 0.12 if len(body_rows) >= 8 else 0.0
+        gut = find_gutters(body_rows, x0, x1, min_w=lh * 0.55, tolerance=btol)
+        # EMPTY COLUMNS: header words that sit entirely inside a data gutter are a column with
+        # no values this month (e.g. "DBRS Rating"). Give them their own slot.
+        # header PHRASES (per header line); only a phrase lying entirely inside a data gutter is
+        # an empty column. A phrase that continues past the gutter is a wide header of a
+        # neighbouring column poking into the gap, not an empty column.
+        hdr_phrases = []
+        for r in hdr_rows0:
+            cur = []
+            for w in r["ws"]:
+                if cur and w["x0"] - cur[-1]["x1"] > lh * 0.45:
+                    hdr_phrases.append(cur)
+                    cur = []
+                cur.append(w)
+            if cur:
+                hdr_phrases.append(cur)
+        new_gut = []
+        for a, b in gut:
+            inside = sorted((ph for ph in hdr_phrases if ph[0]["x0"] >= a - 0.5 and ph[-1]["x1"] <= b + 0.5),
+                            key=lambda ph: ph[0]["x0"])
+            if not inside:
+                new_gut.append((a, b))
+                continue
+            edges = [a] + [e for ph in inside for e in (ph[0]["x0"], ph[-1]["x1"])] + [b]
+            for left, right in zip(edges[0::2], edges[1::2]):
+                if right - left >= lh * 0.3:
+                    new_gut.append((left, right))
+        gut = new_gut
+    else:
+        gut = find_gutters(grows, x0, x1, min_w=lh * 0.55, tolerance=tol)
     cuts = [x0 - 1] + [(a + b) / 2 for a, b in gut] + [x1 + 1]     # separator = gutter middle
     ncol = len(cuts) - 1
 
@@ -375,7 +416,62 @@ def build_table(region: Region):
     if n_hdr == len(rows) and ncol < 3 and len(rows) > 2:
         n_hdr = 0          # digit-free block with 1-2 columns = plain text, not a header
     header = [""] * ncol
+    # data extent of each column (from body rows) -> used to place bottom-row header phrases
+    data_ext = [None] * ncol
+    for r in rows[n_hdr:]:
+        for w in r["ws"]:
+            k = col_of(cx(w))
+            e = data_ext[k]
+            data_ext[k] = (w["x0"], w["x1"]) if e is None else (min(e[0], w["x0"]), max(e[1], w["x1"]))
     for r in rows[:n_hdr]:
+        if n_hdr and r is rows[n_hdr - 1]:
+            # BOTTOM header line: each phrase goes to the column whose DATA it overlaps most
+            # (headers are often wider than their values and poke into the neighbour's gap);
+            # empty columns have no data -> fall back to the column under the phrase centre.
+            phs, cur = [], []
+            for w in r["ws"]:
+                if cur and w["x0"] - cur[-1]["x1"] > lh * 0.45:
+                    phs.append(cur)
+                    cur = []
+                cur.append(w)
+            if cur:
+                phs.append(cur)
+            # a phrase that spans a DATA gutter is two headers that happen to touch
+            # ("LoanX ID" + "Moody's Rating"): split at the word gap nearest that gutter
+            split = []
+            for ph in phs:
+                todo = [ph]
+                while todo:
+                    p_ = todo.pop()
+                    a, b = p_[0]["x0"], p_[-1]["x1"]
+                    g = next(((ga, gb) for ga, gb in gut if a < ga - 1 and b > gb + 1 - (gb - ga)), None)
+                    if g is None or len(p_) < 2:
+                        split.append(p_)
+                        continue
+                    ga, gb = g
+                    # candidate word spaces near the data gutter; the WIDEST is the column boundary
+                    near = [i for i in range(len(p_) - 1)
+                            if max(0, ga - p_[i]["x1"], p_[i + 1]["x0"] - gb) <= lh]
+                    if not near:
+                        split.append(p_)
+                        continue
+                    def known(ws_):
+                        t = " ".join(w["t"] for w in ws_).lower()
+                        return any(re.search(v, t) for v in HEADER_VOCAB)
+
+                    def score(i):   # both halves are known header names > widest space
+                        return (known(p_[:i + 1]) + known(p_[i + 1:]),
+                                p_[i + 1]["x0"] - p_[i]["x1"])
+                    i = max(near, key=score)
+                    todo += [p_[:i + 1], p_[i + 1:]]
+            phs = sorted(split, key=lambda p_: p_[0]["x0"])
+            for ph in phs:
+                a, b = ph[0]["x0"], ph[-1]["x1"]
+                ov = [(min(b, e[1]) - max(a, e[0]), k) for k, e in enumerate(data_ext) if e]
+                best = max(ov) if ov else (0, None)
+                k = best[1] if best[0] > 0 else col_of((a + b) / 2)
+                header[k] = (header[k] + " " + " ".join(w["t"] for w in ph)).strip()
+            continue
         # split the header line into phrases; a phrase that spans several columns
         # ("Fitch Rating" over Original | Current) is added to every column it covers
         phrases, cur = [], []
@@ -390,16 +486,56 @@ def build_table(region: Region):
             a, b = ph[0]["x0"], ph[-1]["x1"]
             txt = " ".join(w["t"] for w in ph)
             spans = [k for k in range(ncol) if min(b, cuts[k + 1]) - max(a, cuts[k]) > 0.25 * (b - a)]
+            # Words that each sit inside ONE column belong to that column ("Excess | Moody's",
+            # "Balance | Coupon %"). Only a phrase whose words straddle a column boundary is a
+            # group header spanning several columns ("Fitch Rating" over Original | Current).
+            def inside(w):
+                k = col_of(cx(w))
+                return min(w["x1"], cuts[k + 1]) - max(w["x0"], cuts[k]) >= 0.8 * (w["x1"] - w["x0"])
+            word_cols = {col_of(cx(w)) for w in ph}
+
+            def aligned(w):
+                # the header word right below in the same column starts, ends or centres with it
+                k = col_of(cx(w))
+                below = [v for rr in rows[:n_hdr] if rr["c"] > r["c"] for v in rr["ws"]
+                         if col_of(cx(v)) == k]
+                if not below:
+                    return False
+                v = min(below, key=lambda v: v["y0"])
+                return (abs(v["x0"] - w["x0"]) < 2 or abs(v["x1"] - w["x1"]) < 2
+                        or abs(cx(v) - cx(w)) < 0.5 * lh)
+            bottom_row = r is rows[n_hdr - 1]
+            if (len(spans) > 1 and len(word_cols) > 1 and all(inside(w) for w in ph)
+                    and (bottom_row or all(aligned(w) for w in ph))):
+                for w in ph:
+                    k = col_of(cx(w))
+                    header[k] = (header[k] + " " + w["t"]).strip()
+                continue
             for k in spans or [col_of((a + b) / 2)]:
                 header[k] = (header[k] + " " + txt).strip()
 
-    # 3) BODY: a line with no digits, few cells, right under the previous row = wrapped text
+    # 3) BODY: glue wrapped lines onto their row.
+    #    "Anchor" columns = columns filled in most body lines (amounts, currency, dates...).
+    #    A line that fills at most 1-2 cells and fewer than 30% of the anchor columns, and is not
+    #    further than a normal row step below the previous line, is the second line of a wrapped
+    #    cell, digits or not:
+    #    "Autoform / CEP V" + "Investment 23 S.a.r.l", "Term Loan B (EUR)" + "(02/22)".
+    all_cells = [(r, to_cells(r["ws"])) for r in rows[n_hdr:]]
+    fill_rate = [sum(bool(c[k]) for _, c in all_cells) / max(len(all_cells), 1) for k in range(ncol)]
+    anchors = [k for k in range(ncol) if fill_rate[k] >= 0.6]
+    steps = [b["c"] - a["c"] for (a, _), (b, _) in zip(all_cells, all_cells[1:])]
+    normal_step = st.median(steps) if steps else 2 * lh
     body, prev_c = [], None
-    for r in rows[n_hdr:]:
-        cells = to_cells(r["ws"])
+    for r, cells in all_cells:
         filled = sum(bool(c) for c in cells)
-        if (body and not has_digit(r["ws"]) and filled <= max(1, 0.3 * ncol)
-                and r["c"] - prev_c < 1.6 * lh):
+        tight = prev_c is not None and r["c"] - prev_c <= 1.25 * normal_step
+        filled_anchors = sum(bool(cells[k]) for k in anchors)
+        only_first = filled == 1 and bool(cells[0])          # possible section label: old rule decides
+        no_anchor = (bool(anchors) and not only_first and filled <= 2
+                     and filled_anchors <= 0.3 * len(anchors))
+        old_rule = not has_digit(r["ws"]) and filled <= max(1, 0.3 * ncol) and prev_c is not None \
+            and r["c"] - prev_c < 1.6 * lh
+        if body and ((no_anchor and tight and len(anchors) >= 2) or old_rule):
             body[-1] = [(p + " " + c).strip() for p, c in zip(body[-1], cells)]
             prev_c = r["c"]
             continue
