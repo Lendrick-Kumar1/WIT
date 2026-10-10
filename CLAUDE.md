@@ -20,6 +20,11 @@ Born-digital trustee PDFs → 3 Excel outputs (Balance, Performance, Collateral)
 - All trustee differences live in `config/trustees/<name>.yaml`. No `if trustee ==` in code. No coordinates.
 - Always use `pdfpage.page_model()` for text: it fixes `/Rotate 90` and treats thin images as separators.
 
+## Current experiment
+`EXPERIMENT_crop_test.md`: XLarge + TableFormer on deterministic PyMuPDF crops vs full pages
+(`tools/crop_test.py`, crops from `src/wit/crops.py`). Do not change the main pipeline until the
+results are in. Help run the test and summarise `out/crop_test/summary.xlsx`.
+
 ## Commands
 - `python demo/make_demo.py` (builds `demo/` from `reports/`), then `python run.py --period 2026-08`
 - `python run.py some.pdf` (ad-hoc), `python run.py some.pdf --debug 3,5` (per page)
