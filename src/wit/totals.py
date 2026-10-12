@@ -16,7 +16,7 @@ A subtotal / total that equals the sum of its rows proves no row was lost or mer
 """
 import pandas as pd
 
-from .pdfpage import NUM, to_num
+from .pdfpage import to_num
 from .table import TOTAL_WORD
 
 
@@ -26,9 +26,8 @@ def amount(v):
 
 
 def is_number(v):
-    """Cell holds one number (percentages included)."""
-    s = v.strip()
-    return bool(NUM.match(s)) and amount(s.rstrip("%")) is not None
+    """Cell holds one number (percentages and currency signs included)."""
+    return to_num(v) is not None
 
 
 # ---------------------------------------------------------------------------------------------
@@ -40,7 +39,9 @@ def stitch_pages(parts):
     A table continues on the next page only if it is the LAST table on its page, the next part is
     the FIRST table on the following page, and both have the same columns. A section ('Loan',
     'Bond') also carries over: leading rows of a continued page that have no section yet belong
-    to the previous page's last section. Returns [(pages, df)] in reading order."""
+    to the previous page's last section. A total printed ABOVE the header (table.build_table keeps
+    it in df.attrs) is placed after the table's last row, so it is checked against all rows.
+    Returns [(pages, df)] in reading order."""
     first, last = {}, {}
     for k, (i, _) in enumerate(parts):
         first.setdefault(i, k)
@@ -69,7 +70,11 @@ def stitch_pages(parts):
             dfs[k] = d
             if col.str.strip().any():
                 sec = col[col.str.strip() != ""].iloc[-1]
-        out.append((pages, pd.concat(dfs, ignore_index=True).fillna("").astype(str)))
+        joined = pd.concat(dfs, ignore_index=True)
+        above = dfs[0].attrs.get("totals_above") or []          # total printed above the header
+        if above:
+            joined = pd.concat([joined, pd.DataFrame(above).reindex(columns=joined.columns)], ignore_index=True)
+        out.append((pages, joined.fillna("").astype(str)))
     return out
 
 
@@ -98,6 +103,8 @@ def mark_totals(df):
     fill = {c: (det[c].str.strip() != "").mean() if len(det) else 0 for c in cols}
     dense = next((k for k, c in enumerate(cols) if fill[c] >= 0.6), 0)
     group_cols = [c for c in cols[:dense] if fill[c] < 0.6]
+    if group_cols:
+        _group_totals_above(out, [c for c in cols if c not in text_cols], group_cols)
     _walk(out, cols, text_cols, group_cols, first)
     if group_cols and "_section" in out:
         out = out.drop(columns="_section")      # in a grouped table, section lines are group labels
@@ -142,13 +149,47 @@ def _classify_lines(df, cols, text_cols, first):
     return out, kinds
 
 
+ABOVE = "ok (group total printed above its rows)"
+
+
+def _group_totals_above(out, num_cols, group_cols):
+    """Some layouts print a group's total ON its first line (issuer line with the issuer total,
+    its facilities below). A group's first line whose amounts equal the sum of the group's other
+    lines, and which leaves empty a column all those lines fill, is that group's subtotal."""
+    starts = [k for k in range(len(out)) if out.at[k, "_row"] == "detail" and out.at[k, group_cols[0]].strip()]
+    for a, b in zip(starts, starts[1:] + [len(out)]):
+        members = [k for k in range(a + 1, b) if out.at[k, "_row"] == "detail"]
+        end = next((k for k in range(a + 1, b) if out.at[k, "_row"] != "detail"), b)
+        members = [k for k in members if k < end]
+        compared, ok = 0, True
+        for c in num_cols:
+            printed = amount(out.at[a, c])
+            vals = [v for v in (amount(out.at[m, c]) for m in members) if v is not None]
+            if printed is None or not vals:
+                continue
+            compared += 1
+            ok = ok and abs(sum(vals) - printed) <= 0.011 * max(1, len(vals))
+        # and it looks like a summary line: it leaves empty a column that all its rows fill
+        # (security name, ID ...), so a real first row that happens to match is not taken
+        always = [c for c in out.columns if not str(c).startswith("_") and members
+                  and all(out.at[m, c].strip() for m in members)]
+        summary_like = any(not out.at[a, c].strip() for c in always)
+        if compared and ok and members and summary_like:
+            out.at[a, "_row"] = "subtotal"
+            out.at[a, "_check"] = ABOVE
+
+
 def _walk(out, cols, text_cols, group_cols, first):
     num_cols = [c for c in cols if c not in text_cols]
     current, members, all_members = None, [], []
     has_sec = "_section" in out and not group_cols and out["_section"].str.strip().any()
     sec_members = {}                                     # section label -> its detail rows so far
+    closed = False                                   # current group's total printed above it
     for k in range(len(out)):
         row = out.loc[k]
+        if out.at[k, "_check"] == ABOVE:                 # group start with its total: not a row
+            current, members, closed = {c: row[c] for c in group_cols}, [], True
+            continue
         if out.at[k, "_row"] == "detail":
             if has_sec:
                 sec_members.setdefault(row["_section"], []).append(k)
@@ -157,7 +198,7 @@ def _walk(out, cols, text_cols, group_cols, first):
                     " ".join(row[group_cols[0]].split()) == " ".join(current[group_cols[0]].split())
                 if not same:                             # a group repeated on a new page continues
                     current = {c: row[c] for c in group_cols}
-                    members = []
+                    members, closed = [], False
             elif group_cols and current:
                 for c in group_cols:
                     if not out.at[k, c].strip():
@@ -168,7 +209,7 @@ def _walk(out, cols, text_cols, group_cols, first):
 
         # a sum line: which rows does it close?
         carried = bool(group_cols) and current is None and not all_members     # group began earlier
-        is_sub = carried or (bool(group_cols) and current is not None and
+        is_sub = not closed and carried or (not closed and bool(group_cols) and current is not None and
                              (not row[first].strip() or row[first].strip() == current[group_cols[0]].strip()))
         rows_k = members if (is_sub and not carried) else ([] if carried else all_members)
         label = " ".join(row[c] for c in cols if row[c].strip() and not is_number(row[c])).lower()

@@ -1,0 +1,18 @@
+# Deutsche Bank (Trust & Agency Services): deal name + "<Section> as of <date>" at the top of every
+# page, landscape A4. A collateral record spans several printed lines (issuer, industries, FIGI).
+names: "Deutsche"                      # matches the Trustee column of the deal list
+detect:
+  all: ["Deutsche Bank"]
+  any: ["Trust & Agency Services", "Payment Date Report"]
+layout:
+  title_band: 0.1                      # section titles sit right under the deal name; tables start below
+pages:
+  performance: ["\\bCoverage Tests as of", "Collateral Quality Tests as of", "Portfolio Profile Tests as of"]
+  balance:     ["Summary as of", "Coverage Test Detail as of"]
+  collateral:  ["\\bPortfolio as of"]
+balance:
+  labels:
+    principal balance: ["<<PLACEHOLDER>>"]
+    default balance:   ["<<PLACEHOLDER>>"]
+    proceeds balance:  ["<<PLACEHOLDER>>"]
+    ccc balance:       ["<<PLACEHOLDER>>"]

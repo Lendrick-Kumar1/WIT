@@ -104,3 +104,30 @@ def test_separate_tables_on_consecutive_pages_are_not_joined():
     first_on_2 = df(["Item", "Value"], [["x", "1"]])
     joined = stitch_pages([(0, a), (1, first_on_2), (1, b)])
     assert len(joined) == 3
+
+
+def test_group_total_printed_on_the_groups_first_line():
+    t = df(["Issuer", "Facility", "ID", "Balance"],
+           [["Alpha Corp", "", "", "3,000.00"],                   # the group's total, on its first line
+            ["", "Term Loan B", "LX100001", "1,000.00"],
+            ["", "Term Loan C", "LX100002", "2,000.00"],
+            ["Beta Inc", "", "", "500.00"],
+            ["", "Term Loan", "LX100003", "500.00"],
+            ["Gamma SA", "", "", "700.00"],
+            ["", "Term Loan", "LX100004", "300.00"],
+            ["", "Revolver", "LX100005", "400.00"],
+            ["Total", "", "", "4,200.00"]])
+    m = mark_totals(t)
+    assert m["_row"].tolist() == ["subtotal", "detail", "detail", "subtotal", "detail", "subtotal", "detail", "detail",
+                                  "total"]
+    assert m.loc[m["_row"] == "detail", "Issuer"].tolist() == ["Alpha Corp"] * 2 + ["Beta Inc"] + ["Gamma SA"] * 2
+    assert all(c.startswith("ok") for c in m.loc[m["_row"] != "detail", "_check"])
+
+
+def test_total_printed_above_the_header_is_checked_after_the_last_row():
+    a = df(["Issuer", "Balance"], [["Alpha", "1,000.00"]])
+    a.attrs["totals_above"] = [{"Issuer": "Grand Totals:", "Balance": "3,000.00"}]
+    b = df(["Issuer", "Balance"], [["Beta", "2,000.00"]])
+    (pages, t), = stitch_pages([(0, a), (1, b)])
+    m = mark_totals(t)
+    assert m["_row"].tolist()[-1] == "total" and m["_check"].tolist()[-1] == "ok"

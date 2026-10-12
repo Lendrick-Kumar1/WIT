@@ -46,7 +46,7 @@ poetry run python run.py some.pdf                   # one PDF, trustee detected 
 poetry run python run.py some.pdf --dump 3          # page 3: every crop table + label/value pairs
 poetry run python run.py ... --fallback             # XLarge for crops whose checks fail (slow)
 poetry run python tools/crop_test.py some.pdf --no-docling   # see how pages are cropped and read
-poetry run python tests/run_tests.py                # 30 rule tests, no PDFs needed
+poetry run python tests/run_tests.py                # 38 rule tests, no PDFs needed
 ```
 Output: `out/<period>/<deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx` and
 `out/<period>/_run_report.xlsx` (sheets: summary, balance_sources, performance_flags,
@@ -60,9 +60,12 @@ collateral_gaps, collateral_sums, xlarge_fallback).
 | 2 | bny_mellon_a | 76 | 204 | 6 / 1 (amount in a column the rows don't use) |
 | 3 (Quarterly folder) | bny_mellon_b | 63 | 158 | 2 / 0 |
 | 4 | citi | 18 | 192 | 0 / 0 (no printed totals) |
-| 5 | us_bank_a | 62 | 123 | 1 / 0 |
-| 6 | us_bank_a | 16 | 170 | 1 / 0 |
+| 5 | us_bank_a | 85 | 123 | 1 / 0 |
+| 6 | us_bank_a | 58 | 170 | 1 / 0 |
 | 7 | (no report) | reported as MISSING | | |
+
+Also tried on 4 newer reports (2 bny_mellon_a, 1 citi, 1 deutsche_bank): every printed collateral
+total checks out (one "nothing to compare with").
 
 - **Performance:** solid on all layouts, including dashboards and banded pages.
 - **Balance:** the mechanism works. The labels are placeholders until filled in from the legacy repo.

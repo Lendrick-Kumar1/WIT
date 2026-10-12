@@ -72,8 +72,9 @@ def split_phrases(ws, gap):
 
 
 def phrases(ws, gap):
-    """Same as split_phrases, as {x0, x1, t} per phrase."""
-    return [dict(x0=p[0]["x0"], x1=p[-1]["x1"], t=" ".join(w["t"] for w in p)) for p in split_phrases(ws, gap)]
+    """Same as split_phrases, as {x0, x1, t, h (tallest word)} per phrase."""
+    return [dict(x0=p[0]["x0"], x1=p[-1]["x1"], t=" ".join(w["t"] for w in p),
+                 h=max(w["y1"] - w["y0"] for w in p)) for p in split_phrases(ws, gap)]
 
 
 def to_num(s, percent=True):

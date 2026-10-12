@@ -411,14 +411,34 @@ def split_sections(body, header, rows, n_hdr, cuts):
 # ---------------------------------------------------------------------------------------------
 # the whole thing
 # ---------------------------------------------------------------------------------------------
-def build_table(words, vocab=()):
+def totals_above_header(rows):
+    """Lines with a 'Total' word and amounts that sit above the column header: some layouts print
+    the grand total on top of the table. Only when a header line (no data) separates them from
+    the first real data line - a key-value box that starts with 'Totals:' is left alone."""
+    first_real = next((i for i, r in enumerate(rows)
+                       if is_data_line(r["ws"]) and not TOTAL_WORD.search(r["text"])), None)
+    if first_real is None:
+        return []
+    header_between = [i for i in range(first_real) if not is_data_line(rows[i]["ws"])]
+    return [rows[i] for i in range(first_real)
+            if TOTAL_WORD.search(rows[i]["text"]) and is_data_line(rows[i]["ws"])
+            and any(h > i for h in header_between)]
+
+
+def build_table(words, vocab=(), rules=()):
     """Words of one table -> DataFrame (all cells text), or None.
     Columns are named by their header ('col<k>' if none); `_section` is added when the table has
-    section labels. vocab = header regexes from config, only used to split touching headers."""
+    section labels. vocab = header regexes from config, only used to split touching headers.
+    rules = y of the full-width rules inside the table (only used for ruled records)."""
+    rec = ruled_records(text_rows(words), rules)
+    if rec:
+        return record_table(*rec, vocab)
     rows0 = text_rows(words)
-    # "There are no ... to report" messages are not part of the table
-    msg = [r for r in rows0 if " ".join(w["t"] for w in r["ws"]).lower().startswith("there are no")]
-    ws = [w for w in words if not any(w in r["ws"] for r in msg)] or words
+    # not part of the table: "There are no ... to report" messages, and totals printed ABOVE the
+    # column header ("Grand Totals: ..." on top of the table)
+    above = totals_above_header(rows0)
+    drop = [r for r in rows0 if r["text"].lower().startswith("there are no")] + above
+    ws = [w for w in words if not any(w in r["ws"] for r in drop)] or words
     rows = text_rows(ws)
     lh = line_height(ws)
     first_data = header_size(rows, lh)
@@ -435,4 +455,115 @@ def build_table(words, vocab=()):
     df = pd.DataFrame(table, columns=cols)
     if not df["_section"].any():
         df = df.drop(columns="_section")
+    # a total printed above the header is kept aside (totals.stitch_pages puts it after the
+    # table's last row, so it is checked against all rows, over every page)
+    df.attrs["totals_above"] = [dict(zip(cols, _cells(r["ws"], cuts) + [""])) for r in above]
+    return df
+
+
+def _cells(ws, cuts):
+    ncol = len(cuts) - 1
+    cells = [""] * ncol
+    for w in ws:
+        k = min(max(next((k for k in range(ncol) if cuts[k] <= cx(w) < cuts[k + 1]), 0), 0), ncol - 1)
+        cells[k] = join(cells[k], w["t"])
+    return cells
+
+
+# ---------------------------------------------------------------------------------------------
+# ruled records: one record per band between rules, its first lines STACKED fields
+# ---------------------------------------------------------------------------------------------
+STACKED = "stacked: "                              # column name prefix of a stacked column
+
+
+def amounts(ws):
+    return sum(bool(MONEY.match(w["t"].strip("€$£"))) for w in ws)
+
+
+def first_full_line(lines):
+    """Index of the first line holding at least half as many amounts as the fullest line (a
+    number inside a name, 'Holdings 2.50', does not make a line full), or None."""
+    most = max((amounts(r["ws"]) for r in lines), default=0)
+    return next((i for i, r in enumerate(lines) if most and amounts(r["ws"]) >= max(1, most / 2)), None)
+
+
+def ruled_records(rows, rules):
+    """Some layouts print every security as a RECORD between two rules: a few text lines first
+    (several fields stacked in one column, e.g. issuer / country / ID, or four industries), then
+    the line(s) with the amounts. The header repeats the stacking.
+    -> (header lines, [(stacked lines, amount lines) per record]) when every band below the first
+    rule starts with text and holds amounts (2+ records), else None. The last band may be a
+    line of amounts only (the total printed under the records)."""
+    ys = sorted(y for y in rules if rows and rows[0]["c"] < y < rows[-1]["c"])
+    if len(ys) < 2:
+        return None
+    bands = [[r for r in rows if a < r["c"] < b] for a, b in zip([-1e9] + ys, ys + [1e9])]
+    header, records = bands[0], [b for b in bands[1:] if b]
+    if not header or len(records) < 2:
+        return None
+    out = []
+    for n, b in enumerate(records):
+        k = first_full_line(b)
+        last_total = n == len(records) - 1 and k == 0 and all(amounts(r["ws"]) == len(r["ws"]) for r in b)
+        if not k and not last_total:               # no amounts, or no text before them
+            return None
+        out.append((b[:k], b[k:]))                 # a total under the last record: no text
+    return header, out
+
+
+def _stacks(records, lh):
+    """x where stacked fields start: phrases of the text lines, left edges clustered."""
+    xs = sorted(p[0]["x0"] for st_lines, _ in records for r in st_lines for p in phrases(r["ws"], lh * 0.9))
+    starts = []
+    for x in xs:
+        if not starts or x - starts[-1][-1] > 1.5 * lh:
+            starts.append([x])
+        else:
+            starts[-1].append(x)
+    return [min(g) for g in starts]
+
+
+def record_table(header, records, vocab=()):
+    """Ruled records -> DataFrame. The amount lines are read like any table (columns measured on
+    them, header named from the header lines). Each stack becomes ONE column holding its lines
+    joined with ' | ' (top to bottom), named 'stacked: ' + the header names stacked there joined
+    with ' / '. Which line is which field is not decided (a field can be missing or wrap), so
+    collateral does not map stacked columns."""
+    lh = line_height([w for _, lines in records for r in lines for w in r["ws"]])   # amount lines
+    starts = _stacks(records, lh)
+
+    def stack_of(x0):
+        k = min(range(len(starts)), key=lambda i: abs(starts[i] - x0))
+        return k if abs(starts[k] - x0) <= 1.5 * lh else None
+
+    names = [[] for _ in starts]
+    rest = []                                       # header words of the amount columns
+    for r in header:
+        for p in phrases(r["ws"], lh * 0.9):
+            k = stack_of(p[0]["x0"])
+            if k is None:
+                rest += p
+            else:
+                names[k].append(" ".join(w["t"] for w in p))
+    data = [r for _, lines in records for r in lines]
+    hrows = text_rows(rest) if rest else []
+    rows = hrows + data
+    ws = [w for r in rows for w in r["ws"]]
+    cuts, gut = column_cuts(rows, ws, len(hrows), lh)
+    head = header_names(rows, len(hrows), cuts, gut, lh, vocab)
+    table = []
+    for st_lines, lines in records:
+        stacked = [[] for _ in starts]
+        for r in st_lines:
+            for p in phrases(r["ws"], lh * 0.9):
+                k = stack_of(p[0]["x0"])
+                k = k if k is not None else min(range(len(starts)), key=lambda i: abs(starts[i] - p[0]["x0"]))
+                stacked[k].append(" ".join(w["t"] for w in p))
+        for cells in body_rows(lines, cuts, lh):
+            table.append([" | ".join(v) for v in stacked] + cells)
+    cols = [STACKED + (" / ".join(n) or f"col{k}") for k, n in enumerate(names)] + \
+        [h or f"col{k}" for k, h in enumerate(head)]
+    cols = [c if cols.count(c) == 1 else f"{c}_{k}" for k, c in enumerate(cols)]
+    df = pd.DataFrame(table, columns=cols)
+    df.attrs["totals_above"] = []
     return df

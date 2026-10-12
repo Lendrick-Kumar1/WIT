@@ -25,9 +25,9 @@ performance:
     skip:    "numerator|denominator|amount|cushion|headroom|calculation|formula|^(test )?number$|max ?/ ?min|maximum ?/ ?minimum"
     test:    "test name|test description|description|limitation|clause|^test$"
     trigger: "threshold|trigger|required|requirement|target|^min$|^max$|minimum|maximum|limit$"
-    result:  "result|pass/fail"
-    prior:   "prior|previous"          # recognised so it is NOT taken as 'current'
-    current: "current|ratio|actual|outcome|value|percentage"
+    prior:   "prior|previous"          # before 'result': "Prior Result" is the prior value
+    current: "current|ratio|actual|outcome|value|percentage"   # "Current Result" is the current value
+    result:  "result|pass ?/ ?fail"
     test2:   "test"                    # generic fallback for the name column
   categories:            # section label / page title -> output 'original tests'
     "Coverage test":            "coverage|par value|interest coverage|overcollateral"

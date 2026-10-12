@@ -108,3 +108,31 @@ def test_no_data_message_is_ignored():
                   line(24, (10, "There are no defaulted obligations to report.")))
     df = build_table(words)
     assert len(df) <= 1 and "There" not in " ".join(df.columns)
+
+
+def test_total_printed_above_the_header_is_kept_aside():
+    words = lines(line(10, (10, "Grand Totals:"), (230, "3,000.00")),
+                  line(24, (10, "Issuer"), (120, "ID"), (230, "Balance")),
+                  line(38, (10, "Alpha"), (120, "LX100001"), (230, "1,000.00")),
+                  line(52, (10, "Beta"), (120, "LX100002"), (230, "2,000.00")))
+    df = build_table(words)
+    assert df["Issuer"].tolist() == ["Alpha", "Beta"]
+    assert df.attrs["totals_above"][0]["Balance"] == "3,000.00"
+
+
+def test_ruled_records_with_stacked_fields():
+    # every security between two rules: issuer / country stacked in one column, then the amounts;
+    # the grand total printed under the last record
+    words = lines(line(10, (10, "Issuer"), (150, "ID"), (260, "Balance")),
+                  line(22, (10, "Country")),
+                  line(50, (10, "Alpha Holdings 2.5")), line(62, (10, "France")),
+                  line(74, (150, "LX100001"), (260, "1,000.00")),
+                  line(100, (10, "Beta SA")), line(112, (10, "Spain")),
+                  line(124, (150, "LX100002"), (260, "2,000.00")), line(136, (150, "LX100003"), (260, "500.00")),
+                  line(160, (260, "3,500.00")))
+    df = build_table(words, rules=[40, 90, 150])
+    assert list(df.columns) == ["stacked: Issuer / Country", "ID", "Balance"]
+    assert df.values.tolist() == [["Alpha Holdings 2.5 | France", "LX100001", "1,000.00"],
+                                  ["Beta SA | Spain", "LX100002", "2,000.00"],
+                                  ["Beta SA | Spain", "LX100003", "500.00"],    # same issuer, 2 lots
+                                  ["", "", "3,500.00"]]

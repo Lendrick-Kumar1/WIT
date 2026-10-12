@@ -35,3 +35,10 @@ def test_footer_is_measured_and_last_row_is_kept():
     words = lines(*body, line(575, (10, "Report name as of 01-Jan-2025"), (500, "Page 9 of 48")))
     top = footer_top(words, 612)
     assert last_row_y + 10 < top < 575
+
+
+def test_footer_found_by_its_page_number_without_a_gap():
+    # the footer sits at the normal line step under the last row; 'Page 9 of 48' gives it away
+    body = [line(100 + 14 * i, (10, f"Row{i}"), (200, f"{i},000.00")) for i in range(30)]
+    words = lines(*body, line(100 + 14 * 30, (10, "Trustee report"), (500, "Page 9 of 48")))
+    assert 100 + 14 * 29 + 10 < footer_top(words, 612) <= 100 + 14 * 30

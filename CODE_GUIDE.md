@@ -10,10 +10,10 @@ does, why it exists, where it lives and which test covers it).
 | 1 | `src/wit/run.py` | ~260 | Command line: for each deal, reads Performance, Balance and Collateral, then writes the Excel files |
 | 2 | `src/wit/config.py`, `sources.py`, `pages.py` | ~190 | Which config applies (trustee), which PDF per deal (deal list + folders), which pages feed which output |
 | 3 | `src/wit/pdfpage.py` | ~100 | Basic page reading: words (rotation fixed), separator lines, text lines, phrases, numbers |
-| 4 | `src/wit/performance.py` | ~160 | Test rows found by header words |
+| 4 | `src/wit/performance.py` | ~200 | Test rows found by header words |
 | 5 | `src/wit/balance.py` | ~150 | Balance values: label to number, or the total of a column |
-| 6 | `src/wit/crops.py` | ~170 | Cuts a page into crops, one table per crop |
-| 7 | `src/wit/table.py` | ~440 | Words of one crop to a table, in 6 named steps |
+| 6 | `src/wit/crops.py` | ~200 | Cuts a page into crops, one table per crop |
+| 7 | `src/wit/table.py` | ~560 | Words of one crop to a table, in 6 named steps; ruled records with stacked fields |
 | 8 | `src/wit/totals.py` | ~220 | Subtotals and totals checked; groups copied down; tables joined across page breaks |
 | 9 | `src/wit/collateral.py` | ~230 | Collateral: crop tables to one row per security, joined on the ID |
 | 10 | `src/wit/fallback.py` | ~70 | XLarge (Docling), optional, only for crops that fail their checks |
@@ -53,8 +53,10 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
 | Title block measured: leading single-phrase lines printed larger than body text | A fixed "top 12%" line cut off column headers on some layouts | `title_bottom` | `test_title_block_is_measured` |
 | Rotated (vertical) header words stop the title block | Vertical column headers are tall and were mistaken for title text | `title_bottom` | n/a |
 | Footer measured: bottom lines separated by a clearly larger gap, holding no amounts | A fixed "bottom 7%" line cut off the last row of a page | `footer_top` | `test_footer_is_measured_and_last_row_is_kept` |
+| Footer also found by its page numbering ("Page 9 of 48", "12 - 35"), even at the normal line step | Footers printed right under the last row have no gap | `footer_top` | `test_footer_found_by_its_page_number_without_a_gap` |
 | Section separators: full-width lines ≤ 2.5 pt, or images 3–12 pt high | Row shading and 2 pt dotted rules are not section breaks | `section_separators` | n/a |
 | A header-only band is glued to the band below | Every crop must carry its own header | `find_crops` step 2 | n/a |
+| A header band followed by 2+ ruled records (each band: text lines first, then amounts) takes them all, plus a total band right after | Layouts that print each security as a record between rules | `find_crops`, `_records_after` | `test_ruled_records_with_stacked_fields` |
 | A vertical rule covering ≥ 80% of the amount lines splits side-by-side tables | Dashboards with two tables next to each other | `find_crops` step 3 | n/a |
 
 ### Reading one table (`table.py`)
@@ -74,6 +76,9 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
 | A line with "Total" / "Subtotal" is never glued to a row | A total line was being read as the last security's wrapped text | `body_rows` | `test_total_line_is_never_glued_to_the_last_row` |
 | A lone column-0 label after a subtotal line starts a section | Section labels ("Loan", "Bond") after a subtotal | `body_rows`, `split_sections` | `test_section_labels_become_a_column` |
 | "There are no ..." messages are dropped | Empty tables print a sentence instead of rows | `build_table` | `test_no_data_message_is_ignored` |
+| A "Total" line with amounts ABOVE the column header is kept aside and checked after the table's last row | Grand total printed on top of the table | `totals_above_header`, `stitch_pages` | `test_total_printed_above_the_header_is_kept_aside`, `test_total_printed_above_the_header_is_checked_after_the_last_row` |
+| Ruled records: one row per amount line; the text lines above it are STACKED fields, one column per stack (lines joined with " \| "), named "stacked: " + the stacked header names | Issuer / country / ID and several industries printed under each other | `ruled_records`, `record_table` | `test_ruled_records_with_stacked_fields` |
+| A line is "full" when it holds at least half the amounts of the fullest line | A number inside a name ("Holdings 2.5") does not make it the amount line | `first_full_line` | `test_ruled_records_with_stacked_fields` |
 
 ### Subtotals, totals and groups (`totals.py`)
 
@@ -84,6 +89,7 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
 | Each sum is compared with the rows it closes (group, section or everything since the last total) | Proves no row was lost or merged | `_walk` | `test_section_subtotals_and_grand_total`, `test_subtotal_that_does_not_add_up_is_flagged` |
 | A labelled figure that is not a sum of the rows above stays a normal row | Key-value boxes like "Total Number of ..." | `_walk` | `test_labelled_figure_in_a_key_value_box_is_not_a_total` |
 | A sum whose rows are on an earlier page is flagged, not failed | First group on a page continued from the page before | `_walk` | `test_total_whose_rows_are_on_an_earlier_page` |
+| A group's first line whose amounts equal the sum of its other lines, and that leaves empty a column they all fill, is the group's subtotal | Issuer total printed on the issuer line, its facilities below | `_group_totals_above` | `test_group_total_printed_on_the_groups_first_line` |
 | Tables joined across a page break only from the last table on a page to the first on the next, with the same columns | Separate small tables on consecutive pages must not be joined | `stitch_pages` | `test_stitch_joins_last_table_with_first_table_of_next_page`, `test_separate_tables_on_consecutive_pages_are_not_joined` |
 | Section carries over the page break | A page continuing a section has no label at its top | `stitch_pages` | `test_stitch_carries_section_over_page_break` |
 
@@ -93,10 +99,21 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
 |---|---|---|---|
 | Header goes to the first field whose synonyms match (config order) | Specific synonyms before generic ones | `map_headers` | `test_first_header_wins_otherwise` |
 | A header that IS the field name wins over a synonym | "Principal Balance" next to "Par/Quantity" | `map_headers` | `test_header_that_is_the_field_name_wins` |
+| Stacked columns are never mapped | Which stacked line is which field is not known (a field can be missing or wrap) | `map_headers` | n/a |
 | ID = the token matching the ID patterns (LoanX, ISIN, FIGI, CUSIP); other IDs must contain a digit | Text overflowing into the ID column | `norm_id` | `test_norm_id_picks_the_id_token` |
 | Rows from the table with the most distinct securities; on a tie, the one listing each security once | Tables splitting a security into lots have no single value per security | `join_on_id` | `test_rows_from_table_with_most_distinct_securities` |
 | Each column from the table whose header names it most directly | "Issuer Name" before "Description" | `join_on_id`, `header_rank` | `test_each_column_from_the_most_specific_header` |
 | XLarge fallback only for crops with IDs on < 50% of rows or failing sums; used only if it does better | Keep the fast path; the model is a last resort | `read_pages`, `_try_xlarge` | n/a (needs Docling) |
+
+### Performance (`performance.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| Roles checked in config order: prior/current before result | "Current Result" holds the value, "Result" the pass/fail | `defaults.yaml` `header_roles` | `test_current_result_header_is_current_not_result` |
+| Header lines can continue BELOW the result line (close, no data); the most complete header line anchors the columns | A line of dates under the header; 3-line headers | `performance` | `test_header_line_below_the_result_line` |
+| The measured page footer is left out | Footer text was glued onto the last test name | `performance` | n/a |
+| A line right under a test row (< 1.6 line heights) with no value continues its name, unless it starts a new item "(s)", "Class ..." | Test names wrapped onto a second line | `performance`, `_wraps` | `test_wrapped_test_name_is_glued_and_section_label_is_not` |
+| A lone digit-free phrase is that wrap only if it has the same text height and does not start left of the name; otherwise it is a section label | Section labels are printed larger and further left | `_wraps` | same |
 
 ### Numbers (`pdfpage.py`)
 
@@ -110,5 +127,8 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
   a new section (`test_lone_word_right_after_a_row_is_a_wrapped_cell`).
 - A total printed in a different column from its rows cannot be checked; it is reported as
   "not checked" / "nothing to compare with".
+- Stacked columns (ruled records) are kept whole: issuer, country and FIGI (or the industries)
+  stay in one cell, so those fields stay empty in Collateral.xlsx (listed in `collateral_gaps`).
+  Splitting them needs a business rule (e.g. FIGI pattern, country list).
 - The *issuer* field takes whatever the best-matching column prints. If a trustee prints
   "Issuer - Facility" in one column, splitting it is a business rule still to add.

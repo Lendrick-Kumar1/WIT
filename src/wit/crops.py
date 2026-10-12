@@ -4,7 +4,8 @@
   2. the page is cut into BANDS at full-width section separators (drawn lines, and the thin
      coloured image bars some trustees use); dotted rules between groups are not cuts
   3. a band holding only a header (no amounts) is glued to the band below it, so every crop
-     carries its own header
+     carries its own header; a header followed by RULED RECORDS (one security per band) takes
+     all of them
   4. inside a band, a vertical rule running down most of the band splits side-by-side tables
 
 page_tables(page) then reads every crop as ONE table (table.build_table).
@@ -17,7 +18,7 @@ import statistics as st
 import pymupdf
 
 from .pdfpage import page_model, rows_of
-from .table import build_table
+from .table import build_table, first_full_line
 
 AMOUNT = re.compile(r"^\(?-?\d[\d,]*\.\d+%?\)?$|^\(?-?\d{1,3}(,\d{3})+\)?$|^-?\d+(\.\d+)?%$")
 
@@ -69,20 +70,30 @@ def title_bottom(words, page_height, max_band=0.2):
     return bottom
 
 
+PAGE_NUMBER = re.compile(r"\bpage\s*\d|\b\d+\s+(of\s+)+\d+\b", re.I)    # "Page 9", "4 of 9"
+
+
 def footer_top(words, page_height, max_band=0.15):
-    """Top of the FOOTER: the lines at the very bottom separated from the content above by a
-    clearly larger gap than the normal line step (report name + 'Page 9 of 48', a web address).
-    A footer never holds money amounts (a subtotal does). No such gap -> no footer."""
+    """Top of the FOOTER, from two signals (the higher one wins), both only for lines in the
+    bottom `max_band` of the page that hold no money amounts (a subtotal does):
+      - a gap clearly larger than the normal line step above the bottom lines
+      - page numbering ('Page 9 of 48', 'Collateral Detail 4 of 9'): that line and everything
+        below it
+    Neither -> no footer."""
     rows = rows_of(words)
     if len(rows) < 3:
         return page_height
     step = st.median(b["c"] - a["c"] for a, b in zip(rows, rows[1:]))
+    top = page_height
     for k in range(len(rows) - 1, 0, -1):
         if rows[k]["c"] < page_height * (1 - max_band) or has_amount(rows[k]["ws"]):
             break
+        if PAGE_NUMBER.search(rows[k]["text"]):
+            top = min(top, min(w["y0"] for w in rows[k]["ws"]) - 0.5)
         if rows[k]["c"] - rows[k - 1]["c"] > 1.25 * step:
-            return min(w["y0"] for w in rows[k]["ws"]) - 0.5
-    return page_height
+            top = min(top, min(w["y0"] for w in rows[k]["ws"]) - 0.5)
+            break
+    return top
 
 
 def find_crops(page, model=None, min_sep_width=0.6, pad=4.0):
@@ -102,9 +113,15 @@ def find_crops(page, model=None, min_sep_width=0.6, pad=4.0):
         ws = [w for w in words if a <= (w["y0"] + w["y1"]) / 2 < b]
         if ws:
             bands.append(ws)
-    # 2) a header-only band (no amounts, <= 4 lines) is glued to the band below
+    # 2) a header-only band (no amounts, <= 4 lines) is glued to the band below; a header
+    #    followed by ruled records (every band: text lines first, then amounts) takes them all
     merged, i = [], 0
     while i < len(bands):
+        n = _records_after(bands, i)
+        if n:
+            merged.append([w for b in bands[i:i + 1 + n] for w in b])
+            i += 1 + n
+            continue
         if i + 1 < len(bands) and not has_amount(bands[i]) and len(rows_of(bands[i])) <= 4:
             merged.append(bands[i] + bands[i + 1])
             i += 2
@@ -129,13 +146,33 @@ def find_crops(page, model=None, min_sep_width=0.6, pad=4.0):
     return crops
 
 
-def crop_table(words, rect, vocab=(), min_words=3):
+def _records_after(bands, i, max_header_lines=10):
+    """Number of ruled-record bands right after a header-only band i (0 if fewer than 2)."""
+    if has_amount(bands[i]) or len(rows_of(bands[i])) > max_header_lines:
+        return 0
+    n = 0
+    for b in bands[i + 1:]:
+        if not first_full_line(rows_of(b)):          # None (no amounts) or 0 (no text first)
+            break
+        n += 1
+    if n >= 2 and i + 1 + n < len(bands) and _amounts_only(bands[i + 1 + n]):
+        n += 1                                       # the total printed after the last record
+    return n if n >= 2 else 0
+
+
+def _amounts_only(band):
+    """A band of 1-2 lines holding nothing but amounts (a total printed under ruled records)."""
+    rows = rows_of(band)
+    return len(rows) <= 2 and all(AMOUNT.match(w["t"]) for w in band)
+
+
+def crop_table(words, rect, vocab=(), min_words=3, rules=()):
     """The words whose centre lies inside `rect`, read as ONE table -> DataFrame, or None."""
     ws = [w for w in words if rect.x0 <= (w["x0"] + w["x1"]) / 2 <= rect.x1
           and rect.y0 <= (w["y0"] + w["y1"]) / 2 <= rect.y1]
     if len(ws) < min_words:
         return None
-    df = build_table(ws, vocab)
+    df = build_table(ws, vocab, [y for y in rules if rect.y0 < y < rect.y1])
     return df if len(df) and df.shape[1] >= 2 else None
 
 
@@ -144,8 +181,9 @@ def page_tables(page, vocab=(), min_words=3):
     vocab = header regexes from config (only used to split two header names that touch)."""
     model = page_model(page)
     out = []
+    rules = section_separators(page, 0.6 * page.rect.width)
     for rect in find_crops(page, model):
-        df = crop_table(model[0], rect, vocab, min_words)
+        df = crop_table(model[0], rect, vocab, min_words, rules)
         if df is not None:
             out.append((rect, df))
     return out

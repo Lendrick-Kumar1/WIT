@@ -18,6 +18,7 @@ import pandas as pd
 
 from .crops import page_tables
 from .pdfpage import to_num
+from .table import STACKED
 from .totals import mark_totals, stitch_pages
 
 ID_FIELD = "loan id"
@@ -60,6 +61,8 @@ def map_headers(headers, columns_cfg):
     ('Principal Balance' over 'Par/Quantity'); otherwise the first one."""
     best = {}                                      # field -> (rank, position, header)
     for pos, h in enumerate(headers):
+        if h.startswith(STACKED):
+            continue                               # several fields in one column: not mapped
         for field, pat in columns_cfg.items():
             if not pat or not re.search(pat, h.lower()):
                 continue
