@@ -5,9 +5,12 @@ Reads CLO trustee reports (born-digital PDFs) and writes, per deal and month, th
 found and how sure it is. CPU only; about 3–6 seconds per report.
 
 **Start here.** This file explains how to set up, run and build.
-- `GUIDE.md`: what WIT does and **why**: the problem, every rule and threshold, the limits.
-- `CODE_TOUR.md`: **how** the code does it: folders and their reasons, which function calls
-  which and what data passes between them, and every function block by block with line numbers.
+Everything else to read is in **`Notes/`**:
+- `Notes/GUIDE.md`: what WIT does and **why**: the problem, every rule and threshold, the limits.
+- `Notes/CODE_TOUR.md`: **how** the code does it: folders and their reasons, which function
+  calls which and what data passes between them, and every function block by block.
+
+Files for Copilot (not for reading) are in `.github/`.
 
 ---
 
@@ -26,10 +29,13 @@ WIT/
 │   ├── tests/              46 rule tests:  python dev/tests/run_tests.py
 │   ├── compare_outputs.py  before/after comparison of two output folders
 │   └── crop_view.py        pictures of how a page is cut into tables
-├── README.md           this file
-├── GUIDE.md            what it does and why (rules, thresholds, limits)
-├── CODE_TOUR.md        how the code does it, function by function, line by line
-└── COPILOT_PORTING.md  for Copilot on the org laptop: copy legacy names into config/
+├── Notes/              everything to read
+│   ├── GUIDE.md            what it does and why (rules, thresholds, limits)
+│   └── CODE_TOUR.md        how the code does it, function by function, line by line
+├── .github/            for Copilot only
+│   ├── copilot-instructions.md   rules Copilot follows when changing code (read automatically)
+│   └── COPILOT_PORTING.md        copy the legacy names into config/ (org laptop)
+└── README.md           this file
 ```
 
 Folders you may see locally but that are never in git: `out/` (results), `reports/`, `probs/`
@@ -99,7 +105,7 @@ there use `{deal}`, `{yyyy}`, `{mm}`:
 Running the same deal and month again overwrites its files.
 Run report sheets: `summary` (one line per deal and month: file found?, counts, statuses),
 `balance_sources`, `performance_flags`, `unmapped_tests`, `collateral_gaps`, `collateral_sums`.
-What each means: `GUIDE.md` §7. Open it after every run; rows with `needs_attention` = True first.
+What each means: `Notes/GUIDE.md` §7. Open it after every run; rows with `needs_attention` = True first.
 
 ---
 
@@ -125,8 +131,9 @@ Then fill in `config/` (no code):
    as printed. Unmapped names stay as printed and are listed in the run report (`unmapped_tests`).
 4. `python app.py run --months 2026-08 --trustee "<one trustee>" --check`, then without `--check`.
 
-The legacy repo already holds most of these names; `COPILOT_PORTING.md` (kept with the legacy
-repo, not here) tells Copilot how to copy them over.
+The legacy repo already holds most of these names; `.github/COPILOT_PORTING.md` tells Copilot how
+to copy them over: on the org laptop, copy that file next to the WIT clone inside the legacy
+repo's ignored folder, and follow its §9.
 
 ### Getting code updates (org laptop only pulls, never pushes)
 ```
@@ -158,4 +165,4 @@ Relative paths in `settings.yaml` are relative to the folder of `WIT.exe`. The X
 3. A wrong page title, label or header name → fix it in `config/` (no code).
 4. A layout the reader can't handle → describe the **pattern** (no deal names, issuer names or
    figures), e.g. "collateral: total printed one column right of its rows", and fix it in code
-   with a test (`GUIDE.md` §9).
+   with a test (`Notes/GUIDE.md` §9).

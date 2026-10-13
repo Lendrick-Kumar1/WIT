@@ -17,7 +17,10 @@ headers, test names, output files and columns) and write it into **WIT's config 
 formats described below, so WIT produces the same kind of output right away.
 
 **Read first:** `WIT/README.md` (how WIT runs) and `WIT/.github/copilot-instructions.md`
-(rules). `WIT/GUIDE.md` §4.2–4.11 explains what each config key does inside the code.
+(rules). `WIT/Notes/GUIDE.md` §4.2–4.11 explains what each config key does inside the code.
+
+**Where this file comes from:** it is kept in the WIT repo at `WIT/.github/COPILOT_PORTING.md`.
+Copy it next to the WIT clone (into the ignored folder) before starting.
 
 ---
 

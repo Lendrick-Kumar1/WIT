@@ -1,9 +1,9 @@
 # Working rules for this repository (read by GitHub Copilot)
 
 WIT reads born-digital CLO trustee report PDFs and writes Balance, Performance and Collateral
-Excel files per deal and month. `README.md` = how to run; `GUIDE.md` = what it does and why,
-every rule (Appendix A); `CODE_TOUR.md` = every function block by block, and the call map.
-When you change a function, update its section in CODE_TOUR.md (and the line numbers).
+Excel files per deal and month. `README.md` = how to run; `Notes/GUIDE.md` = what it does and
+why, every rule (Appendix A); `Notes/CODE_TOUR.md` = every function block by block, and the call
+map. When you change a function, update its section in Notes/CODE_TOUR.md (and the line numbers).
 
 ## Design (do not change without the owner agreeing)
 - PyMuPDF on the main path. No model on the main path (`fallback.py` is optional, `--fallback`).
@@ -25,7 +25,7 @@ When you change a function, update its section in CODE_TOUR.md (and the line num
 ## Changing code
 - Prefer a config change (page title, label, header synonym, test name) over code.
 - A new rule = a small named function or step, a docstring saying the pattern and why, a test in
-  `dev/tests/` built from synthetic words (`dev/tests/helpers.py`), and a row in GUIDE.md
+  `dev/tests/` built from synthetic words (`dev/tests/helpers.py`), and a row in Notes/GUIDE.md
   Appendix A.
 - Keep functions short; no new dependencies without asking.
 

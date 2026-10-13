@@ -7,7 +7,8 @@ how certainty is reported, the known limits, and how to change the code safely.
 Read it **next to the code**, top to bottom. Section 4 follows the files in the order you should
 open them. Every function name in `backticks` exists in the code with that exact name.
 Setting up and running: `README.md`. The rules in one table: Appendix A. The code block by
-block, with line numbers and a map of which function calls which: `CODE_TOUR.md`.
+block, with line numbers and a map of which function calls which: `CODE_TOUR.md` (next to this
+file).
 
 ---
 
@@ -1078,7 +1079,7 @@ Each is flagged, not silent, unless stated otherwise.
 
 ## 10. What to do next
 
-1. **Fill the config from the legacy repo** (org laptop; `COPILOT_PORTING.md` helps): folder and
+1. **Fill the config from the legacy repo** (org laptop; `.github/COPILOT_PORTING.md` helps): folder and
    report-type names, deal list columns, output folder / file / column names, page titles,
    balance labels, header synonyms, standard test names.
 2. **Run one trustee, then everything** for one month; triage the run report by trustee; fix the

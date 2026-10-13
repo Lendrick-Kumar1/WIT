@@ -2,8 +2,8 @@
 
 The code, read with you line by line. Open the file named in each section next to this one.
 
-- `README.md`: how to set up and run.
-- `GUIDE.md`: what WIT does and **why** (the problem, every rule, thresholds, limits).
+- `README.md` (repo root): how to set up and run.
+- `Notes/GUIDE.md`: what WIT does and **why** (the problem, every rule, thresholds, limits).
 - **This file**: **how** the code does it: which folder holds what, which function calls which,
   what data passes between them, and every function block by block.
 
@@ -40,8 +40,9 @@ WIT/
 ├── config/           WHAT to look for and WHERE things are       (data, edited by people)
 ├── src/wit/          HOW to read a PDF                          (code, edited by developers)
 ├── dev/              PROOF that the code still does what it did  (never shipped)
-├── README.md, GUIDE.md, CODE_TOUR.md, COPILOT_PORTING.md
-└── .github/copilot-instructions.md
+├── Notes/            everything to read: GUIDE.md, CODE_TOUR.md (this file)
+├── .github/          for Copilot only: copilot-instructions.md, COPILOT_PORTING.md
+└── README.md         the front page: setup and running
 ```
 
 **Why `config/` is separate from `src/`.** Everything that differs between trustees, deals or
