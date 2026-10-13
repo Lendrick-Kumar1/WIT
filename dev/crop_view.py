@@ -6,9 +6,9 @@ For every page:
   - optional: XLarge on the full page and on every crop, for comparison
 And per PDF: tables that run over a page break, joined, with every subtotal/total checked.
 
-  poetry run python tools/crop_test.py probs/*.pdf --no-docling      # PyMuPDF only (fast)
-  poetry run python tools/crop_test.py some.pdf --pages 3,4          # + XLarge (slow, CPU)
-  poetry run python tools/crop_test.py some.pdf --no-full            # XLarge on crops only
+  poetry run python dev/crop_view.py probs/*.pdf --no-docling      # PyMuPDF only (fast)
+  poetry run python dev/crop_view.py some.pdf --pages 3,4          # + XLarge (slow, CPU)
+  poetry run python dev/crop_view.py some.pdf --no-full            # XLarge on crops only
 
 Output: out/crop_test/<pdf>/p<N>/  page.png, crop<k>.png, crop<k>.pdf, tables.xlsx
                                    (sheets full_t*, c<k>_docling_t*, c<k>_pymupdf_t*)

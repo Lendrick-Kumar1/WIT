@@ -10,7 +10,7 @@
   6. optional (--fallback): a crop whose IDs or sums fail is re-read by XLarge (fallback.py);
      XLarge's table is used only if it passes where PyMuPDF's failed
 
-collateral() returns (rows, checks, fallback_events); run.py writes checks to _run_report.xlsx.
+collateral() returns (rows, checks, fallback_events); run.py writes the checks to the run report.
 """
 import re
 
@@ -160,9 +160,8 @@ def _try_xlarge(xl, doc, i, rect, raw, marked, has_id, share, cfg):
 # ---------------------------------------------------------------------------------------------
 # the whole thing
 # ---------------------------------------------------------------------------------------------
-def collateral(doc, page_idx, cfg, deal="", month="", xl=None):
-    """-> (collateral rows, checks, fallback events)"""
-    ccfg = cfg["collateral"]
+def collateral(doc, page_idx, cfg, xl=None):
+    """-> (collateral rows, checks, fallback events). Rows hold every mapped field + _pages."""
     checks, events, tables = [], [], []
     for pages, df in stitch_pages(read_pages(doc, page_idx, cfg, xl, events)):
         marked = mark_totals(df)
@@ -177,10 +176,7 @@ def collateral(doc, page_idx, cfg, deal="", month="", xl=None):
             tables.append((page, part.drop(columns=[c for c in part.columns if str(c).startswith("_")])))
     checks = pd.DataFrame(checks, columns=["pages", "table", "row", "label", "check"])
     rows = join_on_id(tables, cfg)
-    if rows is None:
-        return pd.DataFrame(columns=ccfg["output_columns"]), checks, events
-    rows["deal name"], rows["report_month"] = deal, month
-    return rows.reindex(columns=ccfg["output_columns"] + ["_pages"]), checks, events
+    return (rows if rows is not None else pd.DataFrame(columns=[ID_FIELD])), checks, events
 
 
 def join_on_id(tables, cfg):
@@ -216,7 +212,8 @@ def join_on_id(tables, cfg):
     keyed = [t.drop_duplicates(subset=[ID_FIELD], keep="first").set_index(ID_FIELD) for t in stacked]
     base = keyed[0][[]].copy()
     # each column from the table whose header names it most directly; gaps from the next one
-    for f in [c for c in ccfg["output_columns"] + ["_pages"] if any(c in k.columns for k in keyed)]:
+    fields = list(dict.fromkeys(c for k in keyed for c in k.columns))
+    for f in fields:
         order = sorted(range(len(keyed)), key=lambda i: (stacked[i].attrs["ranks"].get(f, 99), i))
         col = pd.Series(index=base.index, dtype=object)
         for i in order:

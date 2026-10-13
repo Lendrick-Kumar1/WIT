@@ -1,27 +1,15 @@
-# environments
+# environments and builds
 .venv/
 __pycache__/
 *.pyc
-.pytest_cache/
+build/
+dist/
+*.spec
 
-# per-machine config (copy config/local.example.yaml)
-config/local.yaml
-CLAUDE.local.md
-
-# never commit client PDFs, outputs, caches or model weights
+# data: never in git
 *.pdf
-!tests/fixtures/*.pdf
+*.xlsx
+out/
+out_*/
 reports/
-data/raw/
-data/cache/
-out/
-bench/*.csv
-runs/
-models/
-*.pt
-*.onnx
-*.safetensors
-out/
-demo/reports/
-demo/active_deals.xlsx
-__pycache__/
+probs/

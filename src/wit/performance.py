@@ -5,8 +5,10 @@ anchors on a header line that holds a 'result' word (plus test/ratio/current) an
 below it, until a separator line, a big gap or the next header.
 
 Header words -> roles (test, current, trigger, result, prior, skip) come from config
-`performance.header_roles`; categories (Coverage test / Collateral Quality / Concentration
-limitation) from `performance.categories` and `test_name_categories`.
+`performance.header_roles`.
+
+Each test row carries the name as printed (`original tests`) and the standard name (`test`) from
+config `performance.test_names` (standard_name).
 """
 import re
 import statistics as st
@@ -19,16 +21,17 @@ RESULT_WORDS = r"^(pass(ed)?|fail(ed)?|n/?a|yes|no|true|false|met|not met|breach
 ITEM = re.compile(r"^\(?([a-z]{1,3}|[ivx]+)\)|^class\b", re.I)    # "(s) ...", "(ii) ...", "Class A ...": a new test
 
 
-def category_of(section, test, page_title, pcfg):
-    """Category from the section label, else the page title, else the test name itself."""
-    for src in (section, page_title):
-        for cat, pat in pcfg["categories"].items():
-            if src and re.search(pat, src, re.I):
-                return cat
-    for cat, pat in pcfg.get("test_name_categories", {}).items():
-        if re.search(pat, test, re.I):
-            return cat
-    return section or ""
+def standard_name(printed, test_names):
+    """-> (standard name, mapped?). Among the patterns that match the printed name, the one
+    matching the LONGEST part of it wins (more specific), so config order doesn't matter.
+    No match -> (printed name, False)."""
+    best, best_len = None, -1
+    for std, pats in (test_names or {}).items():
+        for pat in ([pats] if isinstance(pats, str) else pats):
+            m = re.search(pat, printed, re.I)
+            if m and len(m.group(0)) > best_len:
+                best, best_len = std, len(m.group(0))
+    return (best, True) if best is not None else (printed, False)
 
 
 def first_num(text):
@@ -53,8 +56,8 @@ def role_of(text, roles):
 
 
 def performance(page, cfg):
-    """All test rows on one page: dicts with test, current, trigger, result, original tests,
-    _status ('ok' or 'check: ...') and _page."""
+    """All test rows on one page: dicts with test (standard name), original tests (as printed),
+    current, trigger, result, _status ('ok' or 'check: ...'), _mapped and _page."""
     pcfg = cfg["performance"]
     roles = pcfg["header_roles"]
     result_words = pcfg.get("result_vocab", RESULT_WORDS)
@@ -65,7 +68,6 @@ def performance(page, cfg):
     words = [w for w in words if w["y0"] < footer] or words
     rows = rows_of(words)
     lh = st.median(w["y1"] - w["y0"] for w in words)
-    page_title = " ".join(r["text"] for r in rows if r["c"] < page.rect.height * 0.2)
     out = []
     for i, r in enumerate(rows):
         low = r["text"].lower()
@@ -122,12 +124,6 @@ def performance(page, cfg):
                 gx0 = max(gx0, g[0]["x0"] - 15)
             nxt = groups[g_idx + 1][0]["x0"] - 5 if g_idx + 1 < len(groups) else 10_000
             gx1 = min(nxt, g[-1]["x1"] + 2 * lh)     # don't swallow an unrelated table on the right
-            # the section title just above the header (e.g. a coloured bar 'Collateral Quality Tests')
-            section = ""
-            if j >= 0 and r["c"] - rows[j]["c"] < 5 * lh:
-                above = [w for w in rows[j]["ws"] if gx0 <= (w["x0"] + w["x1"]) / 2 < gx1]
-                if above and not any(ch.isdigit() for w in above for ch in w["t"]):
-                    section = " ".join(w["t"] for w in above)
             last = None                                    # (last test row, its line's y)
             for br in body:
                 ws = [w for w in br["ws"] if gx0 <= (w["x0"] + w["x1"]) / 2 < gx1]
@@ -135,17 +131,14 @@ def performance(page, cfg):
                     continue
                 ps = phrases(ws, lh * 0.9)
                 # one phrase, no numbers: the wrapped line of the test just above when it sits
-                # right under it in the test column, else a section label
+                # right under it in the test column; otherwise a section label (not a test)
                 if len(ps) == 1 and not any(ch.isdigit() for ch in ps[0]["t"]):
                     if _wraps(last, out, br, lh, ps[0]) and not ITEM.match(ps[0]["t"]):
                         out[-1]["test"] += " " + ps[0]["t"]
                         last = (out[-1], br["c"], last[2])
-                    else:
-                        section = ps[0]["t"]
                     continue
                 name = None                                # first phrase of the test name
-                rec = {"test": "", "current": None,
-                       "trigger": None, "result": "", "original tests": section, "_page": page.number + 1}
+                rec = {"test": "", "current": None, "trigger": None, "result": "", "_page": page.number + 1}
                 for p in ps:
                     pc = (p["x0"] + p["x1"]) / 2
                     # nearest header column by horizontal overlap / centre distance
@@ -184,12 +177,12 @@ def performance(page, cfg):
                     if to_num(rec["test"]) is not None or len(rec["test"]) < 4:
                         issues.append("test name?")
                     rec["_status"] = "ok" if not issues else "check: " + ", ".join(issues)
-                    rec["original tests"] = category_of(section, rec["test"], page_title, pcfg)
                     out.append(rec)
                     last = (rec, br["c"], name)
+    for rec in out:                                     # printed name -> standard name
+        rec["original tests"] = rec["test"]
+        rec["test"], rec["_mapped"] = standard_name(rec["test"], pcfg.get("test_names"))
     return out
-
-
 
 
 def _wraps(last, out, br, lh, phrase=None):

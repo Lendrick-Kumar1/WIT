@@ -28,9 +28,11 @@ balance:
     proceeds balance:  ["<<label>>"]
     ccc balance:       ["<<label>>"]
 
-# performance:                # only if this trustee uses unusual header words
-#   header_roles:
+# performance:
+#   header_roles:             # only if this trustee uses unusual header words
 #     trigger: "threshold|trigger|<<their word>>"
+#   test_names:               # standard names for this trustee's printed test names (added to defaults)
+#     "<<standard test name>>": ["<<regex of the name as printed>>"]
 
 # collateral:                 # only if this trustee uses unusual column headers
 #   columns:

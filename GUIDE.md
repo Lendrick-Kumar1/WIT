@@ -1,18 +1,12 @@
-# WIT: full walkthrough
+# WIT: how it works
 
-This document explains **everything** in the repository: what problem it solves, how a PDF
-travels through the code, every file and function in reading order, every rule and threshold
-(and why it exists), how certainty is reported, the known limits, how to change the code
-safely, how to set it up on the org laptop, and what to do next.
+This document explains how WIT works: the problem it solves, how a PDF travels through the
+code, every file and function in reading order, every rule and threshold (and why it exists),
+how certainty is reported, the known limits, and how to change the code safely.
 
-It is meant to be read **next to the code**, top to bottom. Section 4 follows the files in the
-order you should open them. Every function name in `backticks` exists in the code with that
-exact name, so you can search for it.
-
-Other docs:
-- `HANDOVER.md`: the short version (what it does, how to run it, status).
-- `CODE_GUIDE.md`: the rules table (rule → why → where → test). Use it as an index.
-- `CLAUDE.md`: the working rules for anyone (person or AI) changing the code.
+Read it **next to the code**, top to bottom. Section 4 follows the files in the order you should
+open them. Every function name in `backticks` exists in the code with that exact name.
+Setting up and running: `README.md`. The rules in one table: Appendix A.
 
 ---
 
@@ -23,9 +17,9 @@ Other docs:
 2. Vocabulary
 3. The big picture: one run, start to finish
 4. File by file, function by function
-   - 4.1 `run.py` and `src/wit/run.py`: command line and orchestration
+   - 4.1 `app.py`, `cli.py`, `gui.py`, `run.py`, `inspect_pdf.py`: starting and running
    - 4.2 `config.py` and the YAML files: which rules apply
-   - 4.3 `sources.py`: which PDF belongs to which deal
+   - 4.3 `sources.py`: which PDF belongs to which deal and month
    - 4.4 `pages.py`: which pages feed which output
    - 4.5 `pdfpage.py`: reading a page (words, lines, phrases, numbers)
    - 4.6 `performance.py`: test rows
@@ -35,15 +29,16 @@ Other docs:
    - 4.10 `totals.py`: subtotals, totals, groups, page breaks
    - 4.11 `collateral.py`: one row per security
    - 4.12 `fallback.py`: the optional model
-   - 4.13 `tools/`, `demo/`, `tests/`
+   - 4.13 `dev/`: tests and checking tools
 5. Worked examples
 6. Every threshold, and what it is measured against
-7. How certainty is reported (`_run_report.xlsx`)
+7. How certainty is reported (the run report)
 8. Known limits and risks
 9. How to change the code safely
-10. Setting up on the org laptop
-11. How to proceed from here
-12. Review checklist
+10. What to do next
+11. Review checklist
+
+Appendix A: every rule, why, where, and its test
 
 ---
 
@@ -57,15 +52,15 @@ Suggested order:
    back to the section. Allow about one hour per big file (`table.py`, `totals.py`,
    `performance.py`). The small files take minutes.
 3. Section 5: run the worked examples in your head; they exercise the hardest rules.
-4. Sections 6–8 are reference material. Come back to them when reviewing a specific rule.
-5. Sections 9–11 before you change anything or go to the org laptop.
+4. Sections 6–8 and Appendix A are reference material. Come back to them when reviewing a rule.
+5. Section 9 before you change anything.
 
 Size of the code (lines, including comments and docstrings):
 
 | File | Lines | Difficulty |
 |---|---|---|
-| `src/wit/run.py` | ~260 | easy (plumbing) |
-| `src/wit/config.py`, `sources.py`, `pages.py` | ~190 | easy |
+| `app.py`, `src/wit/cli.py`, `gui.py`, `run.py`, `inspect_pdf.py` | ~530 | easy (plumbing and window) |
+| `src/wit/config.py`, `sources.py`, `pages.py` | ~330 | easy |
 | `src/wit/pdfpage.py` | ~105 | easy, but everything depends on it |
 | `src/wit/performance.py` | ~200 | medium |
 | `src/wit/balance.py` | ~150 | medium |
@@ -88,15 +83,17 @@ have more than one layout. Each report is 40–200 pages.
 | File | One row per | Columns |
 |---|---|---|
 | `Balance.xlsx` | deal | principal balance, default balance, proceeds balance, CCC balance |
-| `Performance.xlsx` | compliance test | test name, current value, trigger, result (pass/fail), category |
+| `Performance.xlsx` | compliance test | standard test name, test name as printed, current value, trigger, result (pass/fail) |
 | `Collateral.xlsx` | security (loan / bond) | 29 schema columns: ID, issuer, ratings, balance, spread, maturity ... |
 
-Plus one `_run_report.xlsx` per run that says, for every deal, what was found and how sure we
+Plus one run report per run that says, for every deal and month, what was found and how sure we
 are (section 7).
 
 ### Constraints
-- CPU only, 16 GB RAM, Windows + Git Bash + poetry.
-- About 233 deals per period: it must be fast (seconds per report, not minutes).
+- CPU only, 16 GB RAM, Windows. Delivered as `WIT.exe` (a window) for people without Python.
+- About 233 deals per month: it must be fast (seconds per report, not minutes).
+- Runs are chosen by month(s) × deal(s) × output(s): a whole month, one deal and month, one
+  deal over several months, any of Balance / Performance / Collateral.
 - The reports are sensitive: they live on the org laptop only. Code, comments, tests and docs
   never name a deal, issuer or real figure.
 
@@ -125,7 +122,7 @@ checks fail (section 4.12).
    height, normal line step, normal word space.
 2. **Trustee differences live in YAML** (`config/trustees/*.yaml`), never as
    `if trustee == ...` in code.
-3. **Never silently guess.** Uncertain → status/check in `_run_report.xlsx`.
+3. **Never silently guess.** Uncertain → status/check in the run report.
 4. **Comments describe the pattern, not the deal** ("total printed above the header").
 5. **Every rule has a test** built from synthetic words (no PDFs in the repo).
 
@@ -170,109 +167,104 @@ These words are used with an exact meaning in the code and in this document.
 ## 3. The big picture: one run, start to finish
 
 ```
-python run.py --period 2026-08
-│
-├─ config.load_trustees()            defaults.yaml + every trustees/*.yaml (merged)
-├─ sources.plan("2026-08")           deal list Excel → active deals → find each deal's PDF
-│
-└─ for every deal with a PDF:  run.process(pdf, ...)
+WIT.exe / python app.py          (window)        python app.py run --months ... (command line)
+            │                                                │
+            └──────────── months × deals × outputs ──────────┘
+                                   │
+sources.plan(settings, months, deals)      deal list Excel → active deals (+ trustee)
+   for every (month, deal): find_report     <root>/<deal>/<report type>/<YYYY_MM>/*.pdf
+                                             check every PDF, pick one, or missing / broken
+                                   │
+run.run(jobs, outputs, settings)
+   for every job with a PDF:  process(job, outputs)
      │
-     ├─ config.pick_config(doc, ...)  which trustee config applies (deal list + detect patterns)
+     ├─ config.pick_config(doc, trustee from deal list)   which trustee layout applies
      │
-     ├─ PERFORMANCE   read_performance()
-     │     pages.select_pages(…, "performance")      pages whose title matches config
-     │     performance.performance(page) per page    header line with 'result' → rows below
-     │     drop duplicate tests
+     ├─ PERFORMANCE (if selected)   pages.select_pages → performance.performance(page)
+     │                               printed name → standard name; duplicates dropped
+     ├─ BALANCE (if selected)       balance.candidates → resolve; or table_total
+     ├─ COLLATERAL (if selected)    crops.page_tables → stitch_pages → mark_totals → join_on_id
      │
-     ├─ BALANCE       read_balance()
-     │     pages.select_pages(…, "balance")
-     │     balance.candidates(page) per page         label → number right of / below it
-     │     balance.resolve()                          one value per field + status
-     │     balance.table_total()                      or: total of a column on a named page
-     │
-     ├─ COLLATERAL    collateral.collateral()
-     │     pages.select_pages(…, "collateral")
-     │     read_pages():  crops.page_tables(page)     page → crops → one table per crop
-     │                      ├─ crops.find_crops         title/footer out, bands, merge, split
-     │                      └─ table.build_table        words → DataFrame (6 steps)
-     │     totals.stitch_pages()                      tables over page breaks joined
-     │     totals.mark_totals()                       detail / subtotal / total + checks
-     │     join_on_id()                                headers → fields; one row per security ID
-     │
-     └─ DealResult (report line + 3 tables + checks)
-
-write_outputs()  →  out/2026-08/<deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx
-                    out/2026-08/_run_report.xlsx  (summary + every check)
+     └─ write_deal()  →  <out>/<YYYY-MM>/<deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx
+   write_run_report() →  <out>/run_report_<date>_<time>.xlsx
 ```
 
 Key points:
-- The three outputs are read **independently**. A failure in collateral doesn't affect
-  performance.
-- **Deal name, trustee and month come from the org's metadata** (deal list + folder + file
-  name), not from the PDF text, so they are reliable. Only ad-hoc runs (`run.py some.pdf`)
-  read them from the PDF.
-- Only **collateral** uses crops and table reading. Performance and balance read the page's
-  lines directly, because they look for specific words.
+- **Deal, trustee and month come from the deal list and the user's selection**, never from the
+  PDF text. The PDF is only searched for the data.
+- The three outputs are read **independently** and only when selected. A failure in collateral
+  doesn't affect performance; a deal that fails is reported and the run continues.
+- Each deal is written as soon as it is done, so a stopped run keeps what was finished.
+- Only **collateral** (and balance column totals) uses crops and table reading. Performance and
+  balance labels read the page's lines directly, because they look for specific words.
 
 ---
 
 ## 4. File by file, function by function
 
-### 4.1 `run.py` and `src/wit/run.py`: command line and orchestration
+### 4.1 `app.py`, `cli.py`, `gui.py`, `run.py`, `inspect_pdf.py`: starting and running
 
-`run.py` (repo root) only puts `src/` on the Python path and calls `wit.run.main()`.
+**`app.py`** (repo root): puts `src/` on the path; no arguments → the window (`gui.main`),
+arguments → the command line (`cli.main`). `WIT.exe` is this file packaged by PyInstaller
+(`build_exe.bat`).
 
-`src/wit/run.py`:
+**`src/wit/cli.py`**: two commands.
+- `run --months 2026-08 | 2026-01:2026-06 | 2025-06,2026-03:2026-05 [--deal NAME ...] [--trustee TEXT]
+  [--outputs balance,performance,collateral] [--out FOLDER] [--settings FILE] [--check]
+  [--fallback]`. `months_arg` turns the text into a list of (year, month). `--check` only prints
+  the plan (`print_plan`): which PDF would be read for every deal and month. Unknown deal names
+  and an unreadable deal list stop with a clear message.
+- `inspect PDF --pages 12,13 [--trustee TEXT]` → `inspect_pdf.inspect`.
 
-**Constants**
-- `PERF_COLS`, `BAL_FIELDS`, `BAL_COLS`: the output schema columns for Performance and Balance.
-  Collateral's schema is in config (`collateral.output_columns`).
+**`src/wit/gui.py`**: the window, built with **ttkbootstrap** (themed tkinter; pinned to 1.10.1,
+because version 2 renamed its modules). Only standard widgets are used (Labelframe, Combobox,
+Checkbutton as switches, Button, Progressbar, plus a plain Listbox and Text coloured from the
+theme), so it packages cleanly with PyInstaller.
+- `App._build`: Period (year buttons and month buttons, each multi-select; `_selected_months`
+  = every chosen year × every chosen month, future months left out; last month selected at
+  start), Outputs (three switches), Deals (All deals switch, search box, Select shown / Clear,
+  multi-select list; the deal list's `filter` is applied in the background), Check reports /
+  Run / Stop, progress bar, log. Output folders are not shown: they are fixed in
+  `settings.yaml`.
+- Deals: `self.picked` keeps the selected deal names while the search text changes
+  (`_fill_list` re-selects them, `_on_select` updates them).
+- `_start` validates the choice, then `_work` runs in a **background thread** so the window
+  stays responsive. The thread never touches the window: it puts log lines on a queue
+  (`_say`), and `_poll` (every 100 ms, on the window's thread) writes them to the log.
+- **Stop** sets a flag that `run.run` checks before each deal; the progress bar is fed through
+  the same queue (`progress` callback).
 
-**`DealResult`** (dataclass): everything known about one deal after processing: the summary
-line (`report`), the three tables, where balance values came from (`bal_sources`), the
-collateral checks (`coll_checks`), empty collateral columns, fallback events.
+**`src/wit/run.py`**: the engine, used by both.
+- `OUTPUTS` = balance, performance, collateral.
+- `DealResult`: the job, its summary line (`report`), the output tables (internal column names),
+  and everything for the run report (`bal_sources`, `perf_flags`, `unmapped`, `coll_checks`,
+  `empty_cols`, `fallback`).
+- `month_label(job, settings)`: `report_month` as written, `output.month_format` applied to the
+  1st of the month.
+- `read_performance(doc, cfg)`: test rows of every performance page; duplicates (same printed
+  name, current value and trigger) dropped, because many reports print each test twice
+  (summary + detail). *Nuance*: two genuinely different tests with the same printed name, value
+  and trigger would merge; that's why wrapped names matter (4.6).
+- `read_balance(doc, cfg)`: candidates from every balance page → `resolve`; table-total fields →
+  `table_total`.
+- `process(job, outputs, ...)`: one deal and month. No PDF → only the summary line. Otherwise:
+  pick the config, read only the selected outputs, add `deal name`, `report_month`,
+  `asset class`, and decide `needs_attention` (unknown layout, file not ok, no tests, a test
+  not ok, a balance not ok, no collateral rows).
+- `output_path`, `write_deal`: each output goes to its own fixed folder
+  (`output.<name>.dir`) with its file name (`output.<name>.file`); both may use `{deal}`,
+  `{yyyy}`, `{mm}` (characters Windows forbids in the deal name are replaced). Columns from
+  `output.columns` (missing ones stay empty), headers renamed by `output.rename`.
+- `write_run_report`: one Excel per run with 7 sheets (section 7); every sheet has `deal` and
+  `month` first.
+- `run(jobs, outputs, settings, log, xl, stop)`: loops over the jobs; each deal is written as
+  soon as it's done; an exception in one deal is logged and reported (`error` column) and the
+  run continues; the run report is written at the end.
 
-**`deal_info_from_text(doc, cfg)`**: ad-hoc runs only. Looks in the first 5 pages for:
-- a deal name: a line in the top 25% of a page, matching `deal.deal_name` (default `\bCLO\b`),
-  shorter than 70 characters, cut at `deal.deal_name_stop` (e.g. " Monthly", " As of");
-- a month: the first match of `deal.report_month` (a date after "as of").
-
-**`read_performance(doc, cfg, deal, month)`**: for each performance page, calls
-`performance.performance(page, cfg)`, adds deal/month/asset class, then
-`drop_duplicates(subset=["test", "current", "trigger"])`. Why: the same test is often printed
-twice (summary dashboard + detail page). Identical name, value and trigger = the same test.
-*Nuance*: two genuinely different tests with identical name, value and trigger would be
-merged. That is why wrapped names matter (section 4.6): sub-tests that differ only in their
-second line ("rated Aa1 …", "rated Aa2 …") would otherwise collapse into one.
-
-**`read_balance(doc, cfg, deal, month)`**: collects candidates from every balance page,
-resolves them (`balance.resolve`), then fills table-total fields (`balance.table_total`).
-Returns the Balance row and, per field, `{value, status, how, label, page, n}`.
-
-**`process(pdf, defaults, trustees, meta, xl)`**: one report → `DealResult`.
-1. Opens the PDF, picks the config (`pick_config`).
-2. Deal/month from `meta` (period run) or from the text (ad-hoc).
-3. Reads the three outputs.
-4. Lists collateral columns that stayed completely empty (`empty_cols`).
-5. Builds the summary line: counts, balance statuses, sums ok / to check, seconds.
-6. `needs_attention` = unknown layout, OR no tests, OR any test not ok, OR any balance status
-   not ok, OR no collateral rows. (Today almost every deal "needs attention" because the
-   balance labels are placeholders.)
-
-**`write_outputs(results, out, period)`**: writes the 3 clean files per deal (internal columns
-starting with `_` dropped) and `_run_report.xlsx` with 6 sheets (section 7). The deal folder
-name is the deal name with characters Windows forbids replaced by `_`.
-
-**`dump_pages` / `debug_pages`**: diagnostics.
-- `--dump 3`: for page 3, every crop's table after `mark_totals` (first 8 rows), then every
-  "label  value" pair on the page (a line with exactly two phrases, the first not a number).
-  Use it to see what the collateral and balance readers see.
-- `--debug 3`: for page 3, the test rows performance finds and the balance candidates.
-
-**`main()`**: parses arguments:
-`pdfs`, `--period`, `--trustee`, `--out`, `--debug`, `--dump`, `--fallback`, `--artifacts`.
-With `--dump/--debug` it inspects the first PDF and stops. Otherwise it runs either the period
-plan (prints `MISSING` for deals without a report) or the given PDFs, then writes outputs.
+**`src/wit/inspect_pdf.py`**: `inspect(pdf, pages, trustee)` prints, per page, the test rows
+(standard name | printed name | values | status), the balance candidates, every crop's table
+after `mark_totals`, and every "label  value" pair. The first thing to run when a page is read
+wrong.
 
 ---
 
@@ -281,18 +273,23 @@ plan (prints `MISSING` for deals without a report) or the given PDFs, then write
 **The idea.** All trustee-specific knowledge is text in YAML: page titles, labels, header
 synonyms, detection patterns. Adding a trustee = adding one YAML file, no code.
 
+**`config/settings.yaml`** (read by `load_settings`): `reports_root`, `report_types` (priority
+order), `deal_list` (path, sheet, column names for deal / trustee / folder, filter) and `output`
+(folder and file name per output, run-report folder, month format, the columns of each file,
+`rename`). `redirect_outputs` puts all of them under one folder (command line `--out`, used for
+before/after comparisons). Relative
+paths are relative to the app folder (`app_dir()`: the folder of `WIT.exe` when packaged, else
+the repo root), so a copied `dist\WIT` folder works anywhere.
+
 **`config/defaults.yaml`**: the shared vocabulary:
 - `layout.title_band` (0.2): the top 20% of a page is searched for its section title.
 - `pages.*`: page-title regexes per output. Empty list = scan every page.
-- `deal.*`: regexes for ad-hoc runs (above).
 - `performance.header_roles`: header text → role. **Order matters, first match wins**:
   `skip` (numerator, denominator, cushion …) → `test` → `trigger` → `prior` → `current` →
   `result` → `test2`. Why prior/current before result: a header "Current Result" holds the
   *value*, "Prior Result" the *previous value*; only a header that is just "Result" is the
   pass/fail column.
-- `performance.categories`: section label / page title → output category ("Coverage test",
-  "Collateral Quality", "Concentration limitation").
-- `performance.test_name_categories`: fallback, classify by the test name itself.
+- `performance.test_names`: standard test name → patterns of the names as printed (4.6).
 - `balance.labels`: **placeholders** until filled from the legacy repo.
 - `collateral.id_patterns`: what a security ID looks like: LoanX `LX\d{6}`, ISIN
   `[A-Z]{2}[A-Z0-9]{9}\d`, FIGI `BBG[A-Z0-9]{9}`, CUSIP `[A-Z0-9]{9}`.
@@ -300,16 +297,17 @@ synonyms, detection patterns. Adding a trustee = adding one YAML file, no code.
   the first field whose regex matches. That's why "moody.*recovery" comes before
   "moody.*rating": a header "Moody's Recovery Rate" must not become the Moody's rating.
 - `collateral.numeric_columns`: fields converted to numbers in the output.
-- `collateral.output_columns`: the 29+2 output columns, in order.
 
 **`config/trustees/<name>.yaml`**: only what differs: `names` (regex on the deal list's
 trustee column), `detect` (patterns in the PDF text), `layout`, `pages`, `balance.labels`,
-sometimes `deal.report_month`. `_template.yaml` documents every option (files starting with
+sometimes header synonyms or test names. `_template.yaml` documents every option (files starting with
 `_` are ignored).
 
 **`_merge(base, over)`**: dicts merge recursively; lists and scalars in the trustee file
 *replace* the default. Consequence: if a trustee file sets `pages.performance`, it replaces
 the whole default list, not appends to it.
+
+**`load_settings(path)`**: reads `settings.yaml` and makes its paths absolute.
 
 **`load_trustees()`**: reads defaults, then every enabled trustee file merged onto the
 defaults. Returns `(defaults, {name: merged config})`.
@@ -323,7 +321,7 @@ value from the deal list.
 - trustee known and exactly one layout → that one;
 - several layouts (e.g. two BNY layouts) → `detect_trustee` among them; if none matches, the
   first one;
-- trustee unknown (ad-hoc run) → `detect_trustee` across all configs.
+- no trustee given (`inspect` without `--trustee`) → `detect_trustee` across all configs.
 
 **`detect_trustee(doc, defaults, trustees)`**: a config qualifies only if **all** its
 `detect.all` patterns are found; among those, the score is the number of `detect.any` patterns
@@ -332,22 +330,51 @@ the defaults (and `needs_attention`).
 
 ---
 
-### 4.3 `sources.py`: which PDF belongs to which deal
+### 4.3 `sources.py`: which PDF belongs to which deal and month
 
-All names and paths are in `config/sources.yaml`.
+```
+<reports_root>/<deal folder>/<report type>/<month folder>/<any name>.pdf
+```
 
-- **`load_sources()`**: reads `sources.yaml`.
-- **`active_deals(src, trustee)`**: reads the deal-list Excel, applies `filter`
-  (e.g. `{Status: Active}`, compared case-insensitively), optionally keeps only deals whose
-  trustee contains `--trustee`. Returns `{deal, trustee, folder}` per deal.
-- **`period_regex(src, period)`**: turns `file_period_regex` into a regex for one period.
-  Default `(?<!\d){yyyy}[_-]0?{m}(?!\d)` → for 2026-08 it matches `2026_8`, `2026-08`,
-  `2026_08`, but not `2026_18` (the lookarounds stop it from matching inside longer numbers).
-- **`find_report(src, deal_folder, period)`**: looks in
-  `<reports_root>/<deal folder>/<report type>/` for each report type **in priority order**
-  (Monthly, then Quarterly, then Intra); the first folder with a matching PDF wins.
-- **`plan(period, trustee)`**: one job per active deal: `{deal, trustee, folder, pdf,
-  report_type, period}`; `pdf=None` when nothing was found (printed as `MISSING`).
+**Months**
+- `month_of(name)`: a 4-digit year followed by a 1–2 digit month, separated by `_`, `-`, `.`, a
+  space or nothing: `2026_08`, `2026-8`, `202608`, `2026_08_15` → (2026, 8). The digits must not
+  be part of a longer number. If a name holds several, the **last** counts ("Deal 2019-1
+  2026_08" → 2026-08). Years 1991–2099, months 1–12 only. This is code, not a config regex,
+  because the rule is the same everywhere.
+- `parse_month`, `months_between(first, last)`: the list of months from first to last.
+
+**Deals**
+- `active_deals(settings)`: the deal list Excel, `filter` applied (case-insensitive), →
+  `{deal, trustee, folder}`.
+- `select_deals(deals, names, trustee)`: by exact name (case-insensitive; an unknown name is an
+  error, not silently skipped) and/or trustee text.
+
+**Checking a PDF: `check_pdf(path)`** → `ok` or the reason:
+1. size 0 → `empty file`;
+2. the first 1 KB has no `%PDF-` → `not a PDF`;
+3. the last 2 KB have no `%%EOF` → `damaged (file is cut off)` (a download or copy that stopped
+   half-way);
+4. PyMuPDF can't open it → `cannot be opened`; password → `password protected`; 0 pages →
+   `no pages`; PyMuPDF had to repair it → `damaged (had to be repaired)`;
+5. no text on the first 10 pages → `no text (scanned image?)` (a cover page that is an image
+   is fine as long as a later page has text).
+Steps 1–3 read only a few bytes (fast); step 4 is the real test.
+
+**Finding the report: `find_report(settings, deal_folder, ym)`**
+- No deal folder → `missing`.
+- For each report type in priority order: `_pdfs_for_month` = PDFs anywhere inside month
+  folders of that month, plus PDFs whose own name carries the month directly in the type
+  folder. The first type with candidates wins → `_pick`.
+- Nothing → `missing`, with `_latest_month` (the latest month any type has) in the note.
+
+**`_pick(cands, rtype)`**: every candidate is checked; broken ones are skipped (named in the
+note, status `check`). None good → `broken`. Several good: shortest name first ("Report.pdf"
+before "Report (1).pdf"); identical content (MD5) → one used, noted; different files → the
+**newest** (modification time) is used, the others are named, status `check`.
+
+**`plan(settings, months, deal_names, trustee)`**: one job per (month, deal):
+`{deal, trustee, folder, year, month, pdf, report_type, file_status, file_note}`.
 
 ---
 
@@ -418,9 +445,11 @@ wrap onto a second line, section labels between groups of tests.
   met, not met, breach. Overridable via `performance.result_vocab`.
 - `ITEM`: `(a)`, `(ii)`, `Class …` at the start of a line = a new test, never a continuation.
 
-**`category_of(section, test, page_title, pcfg)`**: category from the section label, else the
-page title (config `categories`), else from the test name (`test_name_categories`), else the
-raw section label.
+**`standard_name(printed, test_names)`**: the printed name → (standard name, mapped?). Every
+pattern of every standard name is tried; among those that match, the one matching the
+**longest part** of the printed name wins ("class a/b par value" beats "par value" for "Class
+A/B Par Value Test"), so the order in config doesn't matter. No match → the printed name, not
+mapped (listed in the run report's `unmapped_tests`).
 
 **`first_num(text)`**: the first number in a cell ("100.1% / 2,000,000.00" → 100.1).
 
@@ -455,11 +484,9 @@ raw section label.
    Lines lying inside a rule's band are skipped.
 9. **Per group**, the x range `[gx0, gx1)` it owns: from the previous group's end (+5) or a bit
    left of its test column (−15), to the next group's start (−5) or its last column + 2·lh.
-   Also the **section** title just above the header (within 5·lh, no digits), e.g. a coloured
-   bar "Collateral Quality Tests".
 10. **Per body line**, keep its words inside the group's x range, split into phrases (0.9·lh):
     - **One phrase, no digits**: either the **wrapped second line of the previous test**
-      (glued) or a **section label** (sets `section`). It's a wrap only if `_wraps(...)`:
+      (glued) or a **section label** (skipped). It's a wrap only if `_wraps(...)`:
       directly under the last test row (< 1.6·lh), same text height (≤ 1.1×), and not starting
       left of the test name (≥ name x0 − 0.5·lh); and it doesn't start with an item marker.
       Why height/indent: section labels are printed larger and/or further left; wraps are
@@ -473,6 +500,7 @@ raw section label.
       only) holds and it isn't a new item; otherwise ignored.
     - A **test row** = has a name AND (a current value OR a result). It gets a `_status`:
       `ok`, or `check: no current / result? / test name?`.
+11. Finally every row: `original tests` = the name as printed; `test` = `standard_name(...)`.
 
 **`_wraps(last, out, br, lh, phrase=None)`**: `last` = (last test record, its line's y, its
 name phrase). True when line `br` is < 1.6·lh below it; for a lone phrase, also same height
@@ -576,7 +604,7 @@ ruled records). Returns None for < `min_words` words, no rows, or < 2 columns.
 collateral (min_words=10), balance `table_total`, and the diagnostics.
 
 **`write_crop_pdf`, `preview_png`**: one crop as a one-page PDF (original page, CropBox set, text
-layer kept) and as a PNG. Used by the fallback and `tools/crop_test.py`.
+layer kept) and as a PNG. Used by the fallback and `dev/crop_view.py`.
 
 ---
 
@@ -804,10 +832,11 @@ with an ID column. The output needs one row per security with all fields.
 - `_try_xlarge`: XLarge's table replaces PyMuPDF's only if it has more valid IDs (≥ 50%), or
   passes the sums PyMuPDF failed without losing IDs or more than one column.
 
-**`collateral(doc, page_idx, cfg, deal, month, xl)`**
+**`collateral(doc, page_idx, cfg, xl)`**
 1. `read_pages` → `stitch_pages` → `mark_totals` per joined table.
 2. Every subtotal/total row → a line in `checks` (pages, first 3 headers, row kind, label, check).
-3. Detail rows only, split back per page → `join_on_id`.
+3. Detail rows only, split back per page → `join_on_id`. The output columns and their order are
+   applied later, when writing (`settings.yaml` `output.columns.collateral`).
 
 **`join_on_id(tables, cfg)`**
 1. Per table: map headers; skip tables without an ID field or with fewer than
@@ -838,20 +867,19 @@ and keeps the PyMuPDF result.
 
 ---
 
-### 4.13 `tools/`, `demo/`, `tests/`
+### 4.13 `dev/`: tests and checking tools
 
-- **`tools/crop_test.py`**: for each page: the crops as PNG + PDF, each crop read by PyMuPDF
-  (with checks), optionally XLarge on the page and on each crop; per PDF, the tables over page
-  breaks joined and checked. Output in `out/crop_test/`. Use `--no-docling` for the fast path.
-- **`tools/compare_outputs.py`**: compares two output folders cell by cell (Collateral matched
-  on loan id; timing ignored). Each difference: FILLED / LOST / CHANGED. Exit code 1 if anything
-  differs. This is the regression check after every change.
-- **`demo/make_demo.py`**: builds a fake deal list (`Demo Deal 1–7`) and folder tree from the
-  sample PDFs in `reports/`, so `run.py --period 2026-08` works without org data. Deal 3 sits in
-  the Quarterly folder (folder priority); deal 7 has no report (MISSING).
-- **`tests/`**: 40 tests, one per rule, built from **synthetic words** (`helpers.line(y, (x,
-  "text"))` makes words 5 pt per character, 10 pt high, 3 pt word spaces), or in-memory PDF pages
-  for performance. No PDFs needed. `python tests/run_tests.py` runs them without pytest.
+Not needed to run WIT and not part of `WIT.exe`; used when the code changes.
+
+- **`dev/tests/`**: 46 tests, one per rule, built from **synthetic words** (`helpers.line(y, (x,
+  "text"))` makes words 5 pt per character, 10 pt high, 3 pt word spaces), in-memory PDF pages
+  (performance), or temporary folders with tiny generated PDFs (sources). No real PDFs.
+  `python dev/tests/run_tests.py` runs them without pytest.
+- **`dev/compare_outputs.py`**: compares two output folders cell by cell (Collateral matched on
+  the ID column; the time-stamped run reports matched with each other; timing ignored). Each
+  difference: FILLED / LOST / CHANGED. Exit code 1 if anything differs.
+- **`dev/crop_view.py`**: for each page, the crops as PNG + PDF and each crop's table (optionally
+  XLarge for comparison); per PDF, the tables over page breaks joined and checked.
 
 | Test file | Covers |
 |---|---|
@@ -859,7 +887,9 @@ and keeps the PyMuPDF result.
 | `test_table.py` | data lines, columns from data, empty columns, wraps, centred cells, totals never glued, sections, no-data messages, totals above header, ruled records, seams, bottom header line |
 | `test_totals.py` | grouped subtotals, failing sums, single-row groups, section subtotals, earlier-page totals, key-value figures, stitching (join / carry section / don't join), group total on first line, total above header checked |
 | `test_collateral.py` | header mapping, header rank, IDs, row table choice, column source choice |
-| `test_performance.py` | role order, header line below the result line, wrapped names vs section labels |
+| `test_performance.py` | role order, header line below the result line, wrapped names vs section labels, standard names |
+| `test_sources.py` | month folder names, months range, broken PDFs, report-type priority, duplicates, missing months |
+| `test_run.py` | output file paths |
 
 ---
 
@@ -963,25 +993,26 @@ If you change one of these, run the full regression (section 9): they interact.
 
 ---
 
-## 7. How certainty is reported (`_run_report.xlsx`)
+## 7. How certainty is reported (the run report)
 
-Open it first after every run.
+`<run reports folder>/run_report_<date>_<time>.xlsx`, one per run. Every sheet starts with `deal` and `month`.
 
 | Sheet | One row per | What to look at |
 |---|---|---|
-| `summary` | deal | `layout` (unknown = no config matched), `tests`, `tests_to_check`, `bal:*` statuses, `collateral_rows`, `collateral_empty_columns`, `collateral_sums_ok` / `_to_check`, `needs_attention`, `seconds` |
+| `summary` | deal and month | `file_status` (ok / check / missing / broken) and `file_note`; `layout` (unknown = no config matched); `tests`, `tests_to_check`, `tests_unmapped`; `bal:*` statuses; `collateral_rows`, `collateral_empty_columns`, `collateral_sums_ok` / `_to_check`; `error` (the deal failed); `needs_attention`; `seconds` |
 | `balance_sources` | deal × field | `value`, `status` (ok / ambiguous / conflict / missing / ok (no rows)), `how` (right, right/column, below, ambiguous, table …), `label`, `page`, `n` candidates |
 | `performance_flags` | test row not ok | `_status`: no current / result? / test name?, with page |
-| `collateral_gaps` | deal × empty column | no synonym yet, or the column isn't printed by this trustee, or it's inside a stacked column |
+| `unmapped_tests` | printed test name without a standard name | add a pattern to `performance.test_names` |
+| `collateral_gaps` | empty collateral column | no synonym yet, the trustee doesn't print it, or it's inside a stacked column |
 | `collateral_sums` | printed subtotal/total | `ok`, `ok (group total printed above its rows)`, `check: …` |
 | `xlarge_fallback` | crop re-read (only with `--fallback`) | reason, and whether XLarge was used |
 
 How to read `collateral_sums`:
 - `ok` → the rows of that table were read completely in that column.
 - `check: printed X vs rows Y` → a row was lost, merged or misread (or the total covers rows
-  printed elsewhere). Look at that page with `--dump`.
+  printed elsewhere). Look at that page with `inspect`.
 - `check: its rows are on an earlier page` → a total whose group began before the first page
-  read. Usually harmless; confirm that page selection includes the previous page.
+  read. Usually harmless; check that page selection includes the previous page.
 - `check: nothing to compare with` → the total sits in a column the rows don't use.
 - No sums at all for a deal → that trustee prints no totals; the rows are unverified (say so when
   reporting).
@@ -1003,15 +1034,20 @@ Each is flagged, not silent, unless stated otherwise.
 5. **Issuer field** takes whatever the best-matching column prints; "Issuer - Facility" in one
    column is not split.
 6. **Securities only in secondary tables** are not output rows (4.11).
-7. **Performance de-duplication** merges tests with identical name, current value and trigger.
-8. **Tables without printed totals** cannot be verified (no `collateral_sums` rows).
-9. **A one-word line right under a row**, with no subtotal before it, is read as a wrapped cell,
+7. **Performance de-duplication** merges tests with identical printed name, current value and
+   trigger.
+8. **Standard test names** come only from `performance.test_names`; until it's filled, `test`
+   holds the printed name (listed in `unmapped_tests`).
+9. **Duplicate PDFs that differ**: the newest is used (flagged `check`); if the older one was
+   the right one, remove the wrong file and run again.
+10. **Tables without printed totals** cannot be verified (no `collateral_sums` rows).
+11. **A one-word line right under a row**, with no subtotal before it, is read as a wrapped cell,
    not a new section (`test_lone_word_right_after_a_row_is_a_wrapped_cell`).
-10. **Page selection** depends on the title regexes; a section whose title isn't listed is not
+12. **Page selection** depends on the title regexes; a section whose title isn't listed is not
     read (silent for that section). The legacy key terms fix this; an empty list scans every page.
-11. **Scanned PDFs** have no text layer; this code returns nothing for them (flagged: 0 tests,
-    0 rows). Out of scope (born-digital only).
-12. **Thresholds** were tuned on about 10 reports from 4 trustees. New layouts may need new rules;
+13. **Scanned PDFs** have no text layer; the file check rejects them ("no text (scanned image?)")
+    and they are reported as `broken`. Out of scope (born-digital only).
+14. **Thresholds** were tuned on about 10 reports from 4 trustees. New layouts may need new rules;
     that is the expected way forward (section 9).
 
 ---
@@ -1020,113 +1056,51 @@ Each is flagged, not silent, unless stated otherwise.
 
 1. **Describe the failure as a pattern**, never by deal: "total printed one column right of its
    rows", "header line of dates under the result line".
-2. **Reproduce on one page**: `python run.py some.pdf --dump N` (collateral/balance) or
-   `--debug N` (performance); `tools/crop_test.py some.pdf --pages N --no-docling` for crops.
-3. **Prefer config over code** (a page title, a synonym, a label).
+2. **Reproduce on one page**: `python app.py inspect "<pdf>" --pages N`;
+   `python dev/crop_view.py "<pdf>" --pages N --no-docling` for how the page is cut.
+3. **Prefer config over code** (a page title, a synonym, a label, a test name).
 4. If code: a **small named function or step**, a docstring saying the pattern and why, a
-   **test** from synthetic words in `tests/`, a line in `CODE_GUIDE.md`'s rules table.
+   **test** in `dev/tests/` built from synthetic words, a line in Appendix A.
 5. **Regression**:
-   ```bash
-   python run.py --period 2026-08 --out out_before        # before the change
-   # change
-   python tests/run_tests.py                              # all pass
-   python run.py --period 2026-08 --out out_after
-   python tools/compare_outputs.py out_before out_after
    ```
-   Every FILLED / CHANGED / LOST cell must be explained. LOST and CHANGED need a look at the PDF.
+   python app.py run --months 2026-08 --out out_before        (before the change)
+   (change)
+   python dev/tests/run_tests.py                              (all pass)
+   python app.py run --months 2026-08 --out out_after
+   python dev/compare_outputs.py out_before out_after
+   ```
+   Every FILLED / CHANGED / LOST cell must be explained; LOST and CHANGED need a look at the PDF.
    Also check that the number of `collateral_sums` rows didn't drop: a drop usually means two
    pages of a table no longer have identical columns and were not joined.
-6. `python tools/crop_test.py <problem pdfs> --no-docling`: cross-page sums still ok.
 
 ---
 
-## 10. Setting up on the org laptop
+## 10. What to do next
 
-### 10.1 Getting the code there
-The GitHub repo is **public**. Before pushing:
-- Make it **private** (GitHub → Settings → General → Danger Zone → Change visibility), or use the
-  org's own Git server. The code holds no deal data, but it is work done for the org; check the
-  org's policy on code hosting.
-- Check what Git tracks: `git ls-files` must show **no** `.pdf`, nothing under `out/`,
-  `reports/`, `probs/`, `demo/reports/`, and no `demo/active_deals.xlsx`.
-  Recommended `.gitignore` lines:
-  ```
-  .venv/
-  __pycache__/
-  *.pdf
-  out/
-  out_*/
-  reports/
-  probs/
-  demo/reports/
-  demo/active_deals.xlsx
-  ```
+1. **Fill the config from the legacy repo** (org laptop; `COPILOT_PORTING.md` helps): folder and
+   report-type names, deal list columns, output folder / file / column names, page titles,
+   balance labels, header synonyms, standard test names.
+2. **Run one trustee, then everything** for one month; triage the run report by trustee; fix the
+   most frequent pattern first (config first, code + test if needed).
+3. **Cover the remaining trustees**: one report each; new layouts are where rules get tested.
+4. **Validate against the legacy outputs** for one month, field by field; agree tolerances.
+5. **Business rules** that aren't parsing: splitting stacked fields, "Issuer - Facility",
+   choosing between agencies.
+6. **Build `WIT.exe`** and hand it over with a filled `config/`.
 
-### 10.2 Install
-```bash
-git clone <repo url> WIT && cd WIT
-poetry install
-poetry run python tests/run_tests.py        # 40 passed
-```
-If PyPI is blocked on the org laptop, ask for `pymupdf`, `pandas`, `openpyxl`, `pyyaml` (the
-main path needs only these). Docling is only for `--fallback`.
-
-### 10.3 Config (no code)
-1. `config/sources.yaml`: deal-list path, sheet, column names (deal, trustee, folder), `filter`
-   (e.g. `{Status: Active}`), `reports_root`, `report_folders` in priority order,
-   `file_period_regex` for the real file names.
-2. Per trustee, from the legacy repo:
-   - `names`: regex matching the trustee as the deal list spells it;
-   - `pages.performance / balance / collateral`: the legacy key terms (page titles);
-   - `balance.labels`: the real labels (form a/b/c, section 4.7);
-   - `collateral.columns`: only headers that differ from the defaults.
-   - New trustee: copy `_template.yaml` to `<trustee>.yaml`.
-   - Keep real labels in the org copy only if they are sensitive; the public copy keeps
-     `<<PLACEHOLDER>>`.
-3. Dry run of the plan: `poetry run python run.py --period 2026-08 --trustee "<one trustee>"`.
-
-### 10.4 First real run
-```bash
-poetry run python run.py --period 2026-08 --trustee "<trustee>"     # one trustee first
-poetry run python run.py --period 2026-08                            # then everything
-```
-Then `_run_report.xlsx`, in this order: `summary` (unknown layouts, 0 tests, 0 rows) →
-`collateral_sums` (`check:` rows) → `balance_sources` → `performance_flags` → `collateral_gaps`.
+Not yet: models on the main path, a review UI, tuning thresholds on one report without the
+regression run.
 
 ---
 
-## 11. How to proceed from here
-
-In order of value:
-
-1. **Cover the remaining trustees** (about 5 of 9 not yet seen). For each, one report:
-   run it, look at `_run_report.xlsx`, describe failures as patterns, fix generically (config
-   first, code + test if needed). New layouts are where the rules get tested; every round so far
-   has found 1–3 generic patterns.
-2. **Fill config from the legacy repo** (org laptop): page key terms, balance labels, collateral
-   synonyms, which agency's industry to prefer. This turns most `missing` balances into values
-   and fills more collateral columns.
-3. **Full run of all deals** on the org laptop; triage `_run_report.xlsx` by trustee; fix the most
-   frequent pattern first.
-4. **Validation** (after parsing is stable): compare against the legacy outputs for one period,
-   field by field, with `compare_outputs`-style reports. Decide tolerances with the business.
-5. **Business rules** that aren't parsing: splitting stacked fields, splitting "Issuer -
-   Facility", choosing between agencies, mapping category names.
-6. **Operational**: a scheduled monthly run, a summary email or sheet, keeping
-   `out_<period>` for comparisons between months.
-
-What not to do yet: add models to the main path, build a review UI, or tune thresholds on a single
-report without the regression run.
-
----
-
-## 12. Review checklist
+## 11. Review checklist
 
 Use it per file while reading:
 
 - [ ] `pdfpage.py`: rotation, rules from drawings + images, `rows_of` tolerance, `to_num` cases.
 - [ ] `config.py`: merge semantics (lists replace), `detect` scoring, unknown layout.
-- [ ] `sources.py`: period regex, folder priority, MISSING.
+- [ ] `sources.py`: month names, report-type priority, PDF checks, duplicates, missing.
+- [ ] `run.py`, `cli.py`, `gui.py`: selection → jobs → outputs; errors don't stop a run.
 - [ ] `pages.py`: title band, empty list = all pages.
 - [ ] `performance.py`: header detection, header block above/below, anchor choice, roles order,
       side-by-side groups, body stop conditions, wraps vs section labels, `_status`.
@@ -1138,5 +1112,102 @@ Use it per file while reading:
       tolerance, earlier-page and key-value cases, stitching conditions.
 - [ ] `collateral.py`: map order, field-name wins, stacked skipped, `norm_id`, row-table choice,
       column-source choice.
-- [ ] For each rule in `CODE_GUIDE.md`: does its test describe the pattern, and would it fail
+- [ ] For each rule in Appendix A: does its test describe the pattern, and would it fail
       without the rule?
+
+---
+
+## Appendix A: every rule, why, where, and its test
+
+### Cropping a page (`crops.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| Title block measured: leading single-phrase lines printed larger than body text | A fixed "top 12%" line cut off column headers on some layouts | `title_bottom` | `test_title_block_is_measured` |
+| Rotated (vertical) header words stop the title block | Vertical column headers are tall and were mistaken for title text | `title_bottom` | n/a |
+| Footer measured: bottom lines separated by a clearly larger gap, holding no amounts | A fixed "bottom 7%" line cut off the last row of a page | `footer_top` | `test_footer_is_measured_and_last_row_is_kept` |
+| Footer also found by its page numbering ("Page 9 of 48", "12 - 35"), even at the normal line step | Footers printed right under the last row have no gap | `footer_top` | `test_footer_found_by_its_page_number_without_a_gap` |
+| Section separators: full-width lines ≤ 2.5 pt, or images 3–12 pt high | Row shading and 2 pt dotted rules are not section breaks | `section_separators` | n/a |
+| A header-only band is glued to the band below | Every crop must carry its own header | `find_crops` step 2 | n/a |
+| A header band followed by 2+ ruled records (each band: text lines first, then amounts) takes them all, plus a total band right after | Layouts that print each security as a record between rules | `find_crops`, `_records_after` | `test_ruled_records_with_stacked_fields` |
+| A vertical rule covering ≥ 80% of the amount lines splits side-by-side tables | Dashboards with two tables next to each other | `find_crops` step 3 | n/a |
+
+### Reading one table (`table.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| Data line = has a digit that is not part of a date, or is a `Label: value` pair | Header lines with dates ("Current 5/2/2024") must stay header | `is_data_line` | `test_date_in_header_stays_header`, `test_key_value_lines_are_data` |
+| A line just above the first data line, much closer to it than to the header, is not header | Centred first cell (issuer printed on two lines around the row) | `header_size` | covered by the centred-cell test |
+| Columns measured on data lines, not the header | Two header names printed touching each other would merge two columns | `column_cuts` | `test_columns_come_from_data_not_header` |
+| A gutter may be crossed by up to 12% of lines (8+ lines) | A spanning title or a long label must not destroy a column boundary | `column_cuts`, `find_gutters` | n/a |
+| Header phrase inside a data gutter becomes its own column | Columns with no values this month | `_rescue_empty_columns` | `test_empty_column_keeps_its_header` |
+| Cut in the middle of the widest ink-free part of a gutter | One long cell poking into a wide gutter was being cut in two | `column_cuts` (`cut_in`) | n/a |
+| Narrow seam = column boundary: a right-aligned column right before a left-aligned one, both edges lined up within 1 pt on most lines, the gap clearly wider than a word space, and values that vary or a header showing the same edges | A number column printed 4 pt before a text column ("5.77 Germany" read as one cell) | `_seams` | `test_touching_columns_split_where_both_edges_line_up` |
+| Bottom header line placed by the data under it; touching names split at the gap nearest the data gutter (known header names preferred) | Header names wider than their values; touching names | `_bottom_header_line` | `test_columns_come_from_data_not_header` |
+| A last header line holding only a column-0 label (a section label) is skipped when picking the bottom header line | The real bottom line was handled as an upper line and its names spread over two columns | `header_names` | `test_section_label_under_the_header_is_not_the_bottom_header_line` |
+| Upper header phrase over several columns goes to all of them, unless its words each sit in one column and line up with the words below (or have none below) | Group headers ("Rating" over Original / Current) vs close, separate names | `_upper_header_line` | n/a |
+| Wrapped line glued to the row above (few cells, few anchor columns, within 1.25 row steps) | Top-aligned multi-line cells | `body_rows` | `test_wrapped_cell_below_is_glued`, `test_lone_word_right_after_a_row_is_a_wrapped_cell` |
+| Centred cells: when the table shows the signature, text lines go to the nearer full row | Cells printed above and below their row | `_centred_cells` | `test_centred_cell_lines_above_and_below_are_glued` |
+| A line with "Total" / "Subtotal" is never glued to a row | A total line was being read as the last security's wrapped text | `body_rows` | `test_total_line_is_never_glued_to_the_last_row` |
+| A lone column-0 label after a subtotal line starts a section | Section labels ("Loan", "Bond") after a subtotal | `body_rows`, `split_sections` | `test_section_labels_become_a_column` |
+| "There are no ..." messages are dropped | Empty tables print a sentence instead of rows | `build_table` | `test_no_data_message_is_ignored` |
+| A "Total" line with amounts ABOVE the column header is kept aside and checked after the table's last row | Grand total printed on top of the table | `totals_above_header`, `stitch_pages` | `test_total_printed_above_the_header_is_kept_aside`, `test_total_printed_above_the_header_is_checked_after_the_last_row` |
+| Ruled records: one row per amount line; the text lines above it are STACKED fields, one column per stack (lines joined with " \| "), named "stacked: " + the stacked header names | Issuer / country / ID and several industries printed under each other | `ruled_records`, `record_table` | `test_ruled_records_with_stacked_fields` |
+| A line is "full" when it holds at least half the amounts of the fullest line | A number inside a name ("Holdings 2.5") does not make it the amount line | `first_full_line` | `test_ruled_records_with_stacked_fields` |
+
+### Subtotals, totals and groups (`totals.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| A sum line = amounts and no text except a "Total" label; a label line directly above it is its label | Subtotals printed as "<group>" then "<amount>" on two lines | `_classify_lines` | `test_grouped_table_copies_group_down_and_checks_subtotal` |
+| Group columns = sparse columns left of the first dense column; their values are copied down | Grouped tables print the group only on its first row | `mark_totals`, `_walk` | same |
+| Each sum is compared with the rows it closes (group, section or everything since the last total) | Proves no row was lost or merged | `_walk` | `test_section_subtotals_and_grand_total`, `test_subtotal_that_does_not_add_up_is_flagged` |
+| A labelled figure that is not a sum of the rows above stays a normal row | Key-value boxes like "Total Number of ..." | `_walk` | `test_labelled_figure_in_a_key_value_box_is_not_a_total` |
+| A sum whose rows are on an earlier page is flagged, not failed | First group on a page continued from the page before | `_walk` | `test_total_whose_rows_are_on_an_earlier_page` |
+| A group's first line whose amounts equal the sum of its other lines, and that leaves empty a column they all fill, is the group's subtotal | Issuer total printed on the issuer line, its facilities below | `_group_totals_above` | `test_group_total_printed_on_the_groups_first_line` |
+| Tables joined across a page break only from the last table on a page to the first on the next, with the same columns | Separate small tables on consecutive pages must not be joined | `stitch_pages` | `test_stitch_joins_last_table_with_first_table_of_next_page`, `test_separate_tables_on_consecutive_pages_are_not_joined` |
+| Section carries over the page break | A page continuing a section has no label at its top | `stitch_pages` | `test_stitch_carries_section_over_page_break` |
+
+### Collateral (`collateral.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| Header goes to the first field whose synonyms match (config order) | Specific synonyms before generic ones | `map_headers` | `test_first_header_wins_otherwise` |
+| A header that IS the field name wins over a synonym | "Principal Balance" next to "Par/Quantity" | `map_headers` | `test_header_that_is_the_field_name_wins` |
+| Stacked columns are never mapped | Which stacked line is which field is not known (a field can be missing or wrap) | `map_headers` | n/a |
+| ID = the token matching the ID patterns (LoanX, ISIN, FIGI, CUSIP); other IDs must contain a digit | Text overflowing into the ID column | `norm_id` | `test_norm_id_picks_the_id_token` |
+| Rows from the table with the most distinct securities; on a tie, the one listing each security once | Tables splitting a security into lots have no single value per security | `join_on_id` | `test_rows_from_table_with_most_distinct_securities` |
+| Each column from the table whose header names it most directly | "Issuer Name" before "Description" | `join_on_id`, `header_rank` | `test_each_column_from_the_most_specific_header` |
+| XLarge fallback only for crops with IDs on < 50% of rows or failing sums; used only if it does better | Keep the fast path; the model is a last resort | `read_pages`, `_try_xlarge` | n/a (needs Docling) |
+
+### Performance (`performance.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| Roles checked in config order: prior/current before result | "Current Result" holds the value, "Result" the pass/fail | `defaults.yaml` `header_roles` | `test_current_result_header_is_current_not_result` |
+| Header lines can continue BELOW the result line (close, no data); the most complete header line anchors the columns | A line of dates under the header; 3-line headers | `performance` | `test_header_line_below_the_result_line` |
+| The measured page footer is left out | Footer text was glued onto the last test name | `performance` | n/a |
+| A line right under a test row (< 1.6 line heights) with no value continues its name, unless it starts a new item "(s)", "Class ..." | Test names wrapped onto a second line | `performance`, `_wraps` | `test_wrapped_test_name_is_glued_and_section_label_is_not` |
+| A lone digit-free phrase is that wrap only if it has the same text height and does not start left of the name; otherwise it is a section label | Section labels are printed larger and further left | `_wraps` | same |
+
+### Numbers (`pdfpage.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| One parser: thousands separators, (negative), >= / <=, €/$/£, EUR/USD/GBP, [A] markers; percentages optional | Every module reads numbers the same way | `to_num` | `test_to_num` |
+
+### Finding reports (`sources.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| Month folder = 4-digit year + 1–2 digit month in its name; the last one in a name counts | Folder names vary (2026_08, 2026-8, 202608, 2026_08_15) | `month_of` | `test_month_of_folder_and_file_names` |
+| Report types tried in priority order | A deal may have monthly and quarterly folders | `find_report` | `test_find_report_priority_duplicates_and_missing` |
+| Every PDF checked by its bytes, then opened | A corrupted or cut-off file was once dropped in a month folder | `check_pdf` | `test_check_pdf_finds_broken_files` |
+| Identical copies → one used; different files → newest used, flagged | Rarely a file is duplicated | `_pick` | `test_find_report_priority_duplicates_and_missing` |
+| Missing month → reported with the latest month available | Quarterly deals have no monthly report | `_latest_month` | same |
+
+### Performance names (`performance.py`)
+
+| Rule | Why | Where | Test |
+|---|---|---|---|
+| `original tests` = name as printed; `test` = standard name, longest matching pattern wins; unmapped → printed name, listed | Trustees print the same test differently ("Senior IC" vs "Senior Interest Coverage Test") | `standard_name` | `test_standard_name_longest_match_wins_and_unmapped_keeps_printed_name` |

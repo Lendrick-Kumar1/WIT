@@ -1,0 +1,50 @@
+# settings.yaml: where things are and how the output files look.
+# Fill in on the org laptop. Paths may be absolute (E:/...) or relative to the WIT folder.
+# Use forward slashes, or put Windows paths in single quotes: 'E:\CDOA\Reports'.
+
+# ---- input -------------------------------------------------------------------------------
+reports_root: "E:/CDOA/Reports"         # <reports_root>/<deal folder>/<report type>/<YYYY_MM>/*.pdf
+
+report_types:                           # report-type folders, in PRIORITY order (first with the month wins)
+  - "Monthly Trustee Report"
+  - "Quarterly Trustee Report"
+  - "Intra Trustee Report"
+
+deal_list:                              # the active-deals Excel: gives every deal its trustee
+  path: "<<path to the active deals Excel>>"
+  sheet: 0                              # sheet name or index
+  columns:
+    deal: "Deal Name"                   # column with the deal name (as shown and written in outputs)
+    trustee: "Trustee"                  # column with the trustee (matched by `names:` in config/trustees/*.yaml)
+    folder: "Deal Name"                 # column whose value is the deal's folder name under reports_root
+  filter: {}                            # e.g. {Status: Active}
+
+# ---- output ------------------------------------------------------------------------------
+# One fixed folder per output. File names may use {deal} {yyyy} {mm}; so may folders
+# (e.g. "E:/CDOA/Output/Balance/{yyyy}-{mm}").
+output:
+  balance:
+    dir: "out/Balance"
+    file: "{deal}_{yyyy}_{mm}.xlsx"
+  performance:
+    dir: "out/Performance"
+    file: "{deal}_{yyyy}_{mm}.xlsx"
+  collateral:
+    dir: "out/Collateral"
+    file: "{deal}_{yyyy}_{mm}.xlsx"
+  run_reports: "out/Run reports"          # one run report per run
+  month_format: "%Y-%m"                 # how report_month is written (strftime, on the 1st of the month)
+
+  # columns of each file, in order (internal names; see `rename` for the headers written)
+  columns:
+    balance: [deal name, report_month, principal balance, default balance, proceeds balance,
+              ccc balance, asset class]
+    performance: [deal name, test, report_month, current, trigger, result, original tests, asset class]
+    collateral: [issuer, loan id, dbrsm_ind, country_code, seniority, cov_lite, defaulted, coupon type,
+                 current coupon, current spread, libor, maturity date, "moody's rating", s&p rating,
+                 fitch rating, dbrs rating, dbrs_ce, rec_rate_moody, rec_rate_sp, rtg_watch_mdy,
+                 rtg_watch_sp, rtg_watch_fitch, rtg_watch_dbrs, principal balance, unfunded,
+                 dbrsm_ind_code, payment period, issue, industry classification, report_month, deal name]
+
+  rename: {}                            # internal column name -> header written in the files
+                                        # e.g. {"loan id": "LoanX ID", "deal name": "Deal"}

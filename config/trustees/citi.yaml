@@ -2,8 +2,6 @@
 names: "Citi|Citibank|Virtus"          # matches the Trustee column of the deal list
 detect:
   any: ["citicorp|citibank|citi\\b", "virtus", "Monthly Report As Of"]
-deal:
-  report_month: "monthly report as of\\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})"
 pages:
   performance: ["Summary Page", "Portfolio Profile Test Summary", "Additional Limitations Summary",
                 "Par Value Tests", "Interest Coverage Tests"]

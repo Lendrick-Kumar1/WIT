@@ -1,16 +1,19 @@
 """Compare two output folders cell by cell (regression check after a code change).
 
-    poetry run python run.py --period 2026-08 --out out_before      # before the change
+    python app.py run --months 2026-08 --out out_before      # before the change
     ... change code ...
-    poetry run python run.py --period 2026-08 --out out_after
-    poetry run python tools/compare_outputs.py out_before out_after
+    python app.py run --months 2026-08 --out out_after
+    python dev/compare_outputs.py out_before out_after
 
-Every .xlsx, every sheet, every cell. Collateral rows are matched on loan id (row order may
-change). Timing columns are ignored. For each difference it says FILLED (was empty), LOST
+Every .xlsx, every sheet, every cell. The run reports (time-stamped names) are compared with
+each other. Collateral rows are matched on the ID column (`--key`, default 'loan id'; use the
+renamed header if settings.yaml renames it), so row order may change. Timing columns are ignored. For each difference it says FILLED (was empty), LOST
 (now empty) or CHANGED. Exit code 1 if anything differs.
 """
 import sys
 from pathlib import Path
+
+import re
 
 import pandas as pd
 
@@ -22,25 +25,30 @@ def load(path):
             for s, df in pd.read_excel(path, sheet_name=None).items()}
 
 
-def compare(a_root, b_root, show=10):
-    a_root, b_root = Path(a_root), Path(b_root)
-    fa = {p.relative_to(a_root) for p in a_root.rglob("*.xlsx")}
-    fb = {p.relative_to(b_root) for p in b_root.rglob("*.xlsx")}
+def files(root):
+    """relative name -> path; 'run_report_<date>_<time>.xlsx' -> 'run_report.xlsx'."""
+    return {Path(re.sub(r"run_report_[\d_-]+\.xlsx$", "run_report.xlsx", str(p.relative_to(root)))): p
+            for p in Path(root).rglob("*.xlsx")}
+
+
+def compare(a_root, b_root, show=10, key="loan id"):
+    pa, pb = files(a_root), files(b_root)
+    fa, fb = set(pa), set(pb)
     diffs = 0
     for rel in sorted(fa ^ fb):
         print(f"ONLY IN {'first' if rel in fa else 'second'}: {rel}")
         diffs += 1
     for rel in sorted(fa & fb):
-        x, y = load(a_root / rel), load(b_root / rel)
+        x, y = load(pa[rel]), load(pb[rel])
         for sheet in sorted(set(x) | set(y)):
             if sheet not in x or sheet not in y:
                 print(f"{rel} [{sheet}]: sheet only in one of them")
                 diffs += 1
                 continue
             p, q = x[sheet], y[sheet]
-            if "loan id" in p.columns and "loan id" in q.columns:
-                p = p.drop_duplicates("loan id").set_index("loan id")
-                q = q.drop_duplicates("loan id").set_index("loan id")
+            if key in p.columns and key in q.columns:
+                p = p.drop_duplicates(key).set_index(key)
+                q = q.drop_duplicates(key).set_index(key)
                 if set(p.index) != set(q.index):
                     print(f"{rel} [{sheet}]: loan ids differ: {len(set(p.index) - set(q.index))} only first, "
                           f"{len(set(q.index) - set(p.index))} only second")
@@ -69,4 +77,6 @@ def compare(a_root, b_root, show=10):
 
 
 if __name__ == "__main__":
-    sys.exit(1 if compare(sys.argv[1], sys.argv[2]) else 0)
+    args = [a for a in sys.argv[1:] if not a.startswith("--key=")]
+    k = next((a.split("=", 1)[1] for a in sys.argv[1:] if a.startswith("--key=")), "loan id")
+    sys.exit(1 if compare(args[0], args[1], key=k) else 0)

@@ -1,8 +1,8 @@
 """XLarge (Docling egret-xlarge layout + TableFormer ACCURATE, OCR off, offline models).
 
 Used in two places, both optional:
-  - run.py --fallback        re-read ONE crop whose IDs or sums failed (collateral.read_pages)
-  - tools/crop_test.py       compare XLarge with PyMuPDF on full pages and crops
+  - app.py run --fallback    re-read ONE crop whose IDs or sums failed (collateral.read_pages)
+  - dev/crop_view.py         compare XLarge with PyMuPDF on full pages and crops
 
 Docling is imported only when a table is actually needed, and the converter is loaded once.
 A crop is the original page with its CropBox set (text layer kept), so no OCR is involved.

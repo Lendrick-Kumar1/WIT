@@ -6,7 +6,7 @@ Each word is ~5 pt per character wide and 10 pt high; words of one cell are 3 pt
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 CHAR_W, H, SPACE = 5.0, 10.0, 3.0
 

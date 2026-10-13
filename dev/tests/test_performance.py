@@ -3,7 +3,7 @@ import helpers  # noqa: F401  (puts src/ on the path)
 import pymupdf
 
 from wit.config import load_trustees
-from wit.performance import performance, role_of
+from wit.performance import performance, role_of, standard_name
 
 CFG, _ = load_trustees()
 COLS = {"test": 40, "trigger": 300, "current": 380, "result": 460}
@@ -53,3 +53,10 @@ def test_wrapped_test_name_is_glued_and_section_label_is_not():
     assert [r["test"] for r in recs] == ["(a) Exposure to a Selling Institution rated Aaa or below",
                                          "(b) Exposure to a Selling Institution rated AA or below",
                                          "(c) Weighted Average Life"]
+
+
+def test_standard_name_longest_match_wins_and_unmapped_keeps_printed_name():
+    names = {"Par Value Test": ["par value"], "Class A/B Par Value Test": ["class a/b par value"]}
+    assert standard_name("Class A/B Par Value Test", names) == ("Class A/B Par Value Test", True)
+    assert standard_name("Class C Par Value Test", names) == ("Par Value Test", True)
+    assert standard_name("Weighted Average Life", names) == ("Weighted Average Life", False)
