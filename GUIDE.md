@@ -6,7 +6,8 @@ how certainty is reported, the known limits, and how to change the code safely.
 
 Read it **next to the code**, top to bottom. Section 4 follows the files in the order you should
 open them. Every function name in `backticks` exists in the code with that exact name.
-Setting up and running: `README.md`. The rules in one table: Appendix A.
+Setting up and running: `README.md`. The rules in one table: Appendix A. The code block by
+block, with line numbers and a map of which function calls which: `CODE_TOUR.md`.
 
 ---
 

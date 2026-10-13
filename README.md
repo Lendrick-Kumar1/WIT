@@ -4,8 +4,10 @@ Reads CLO trustee reports (born-digital PDFs) and writes, per deal and month, th
 **Balance**, **Performance**, **Collateral**, plus one **run report** per run that says what was
 found and how sure it is. CPU only; about 3–6 seconds per report.
 
-**Start here.** This file explains how to set up, run and build. `GUIDE.md` explains how it works,
-file by file and rule by rule.
+**Start here.** This file explains how to set up, run and build.
+- `GUIDE.md`: what WIT does and **why**: the problem, every rule and threshold, the limits.
+- `CODE_TOUR.md`: **how** the code does it: folders and their reasons, which function calls
+  which and what data passes between them, and every function block by block with line numbers.
 
 ---
 
@@ -25,7 +27,9 @@ WIT/
 │   ├── compare_outputs.py  before/after comparison of two output folders
 │   └── crop_view.py        pictures of how a page is cut into tables
 ├── README.md           this file
-└── GUIDE.md            how it works
+├── GUIDE.md            what it does and why (rules, thresholds, limits)
+├── CODE_TOUR.md        how the code does it, function by function, line by line
+└── COPILOT_PORTING.md  for Copilot on the org laptop: copy legacy names into config/
 ```
 
 Folders you may see locally but that are never in git: `out/` (results), `reports/`, `probs/`

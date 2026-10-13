@@ -1,8 +1,9 @@
 # Working rules for this repository (read by GitHub Copilot)
 
 WIT reads born-digital CLO trustee report PDFs and writes Balance, Performance and Collateral
-Excel files per deal and month. `README.md` = how to run; `GUIDE.md` = how it works and every
-rule (Appendix A).
+Excel files per deal and month. `README.md` = how to run; `GUIDE.md` = what it does and why,
+every rule (Appendix A); `CODE_TOUR.md` = every function block by block, and the call map.
+When you change a function, update its section in CODE_TOUR.md (and the line numbers).
 
 ## Design (do not change without the owner agreeing)
 - PyMuPDF on the main path. No model on the main path (`fallback.py` is optional, `--fallback`).
