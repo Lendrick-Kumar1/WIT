@@ -46,7 +46,7 @@ poetry run python run.py some.pdf                   # one PDF, trustee detected 
 poetry run python run.py some.pdf --dump 3          # page 3: every crop table + label/value pairs
 poetry run python run.py ... --fallback             # XLarge for crops whose checks fail (slow)
 poetry run python tools/crop_test.py some.pdf --no-docling   # see how pages are cropped and read
-poetry run python tests/run_tests.py                # 38 rule tests, no PDFs needed
+poetry run python tests/run_tests.py                # 40 rule tests, no PDFs needed
 ```
 Output: `out/<period>/<deal>/Balance.xlsx, Performance.xlsx, Collateral.xlsx` and
 `out/<period>/_run_report.xlsx` (sheets: summary, balance_sources, performance_flags,

@@ -69,8 +69,10 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
 | A gutter may be crossed by up to 12% of lines (8+ lines) | A spanning title or a long label must not destroy a column boundary | `column_cuts`, `find_gutters` | n/a |
 | Header phrase inside a data gutter becomes its own column | Columns with no values this month | `_rescue_empty_columns` | `test_empty_column_keeps_its_header` |
 | Cut in the middle of the widest ink-free part of a gutter | One long cell poking into a wide gutter was being cut in two | `column_cuts` (`cut_in`) | n/a |
+| Narrow seam = column boundary: a right-aligned column right before a left-aligned one, both edges lined up within 1 pt on most lines, the gap clearly wider than a word space, and values that vary or a header showing the same edges | A number column printed 4 pt before a text column ("5.77 Germany" read as one cell) | `_seams` | `test_touching_columns_split_where_both_edges_line_up` |
 | Bottom header line placed by the data under it; touching names split at the gap nearest the data gutter (known header names preferred) | Header names wider than their values; touching names | `_bottom_header_line` | `test_columns_come_from_data_not_header` |
-| Upper header phrase over several columns goes to all of them, unless its words line up with the words below | Group headers ("Rating" over Original / Current) vs close, separate names | `_upper_header_line` | n/a |
+| A last header line holding only a column-0 label (a section label) is skipped when picking the bottom header line | The real bottom line was handled as an upper line and its names spread over two columns | `header_names` | `test_section_label_under_the_header_is_not_the_bottom_header_line` |
+| Upper header phrase over several columns goes to all of them, unless its words each sit in one column and line up with the words below (or have none below) | Group headers ("Rating" over Original / Current) vs close, separate names | `_upper_header_line` | n/a |
 | Wrapped line glued to the row above (few cells, few anchor columns, within 1.25 row steps) | Top-aligned multi-line cells | `body_rows` | `test_wrapped_cell_below_is_glued`, `test_lone_word_right_after_a_row_is_a_wrapped_cell` |
 | Centred cells: when the table shows the signature, text lines go to the nearer full row | Cells printed above and below their row | `_centred_cells` | `test_centred_cell_lines_above_and_below_are_glued` |
 | A line with "Total" / "Subtotal" is never glued to a row | A total line was being read as the last security's wrapped text | `body_rows` | `test_total_line_is_never_glued_to_the_last_row` |
@@ -130,5 +132,8 @@ deal list + folders ──► PDF ──► config (trustee YAML) ──► page
 - Stacked columns (ruled records) are kept whole: issuer, country and FIGI (or the industries)
   stay in one cell, so those fields stay empty in Collateral.xlsx (listed in `collateral_gaps`).
   Splitting them needs a business rule (e.g. FIGI pattern, country list).
+- Several columns can match one field (e.g. "Fitch Industry" and "S&P Industry" both match
+  *industry*): the first one in the table wins. To prefer one, put a more specific synonym first
+  in config (`collateral.columns`).
 - The *issuer* field takes whatever the best-matching column prints. If a trustee prints
   "Issuer - Facility" in one column, splitting it is a business rule still to add.

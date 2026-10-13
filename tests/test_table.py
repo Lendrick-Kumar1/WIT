@@ -136,3 +136,34 @@ def test_ruled_records_with_stacked_fields():
                                   ["Beta SA | Spain", "LX100002", "2,000.00"],
                                   ["Beta SA | Spain", "LX100003", "500.00"],    # same issuer, 2 lots
                                   ["", "", "3,500.00"]]
+
+
+def test_touching_columns_split_where_both_edges_line_up():
+    # a right-aligned number column printed 5 pt before a left-aligned text column (narrower than
+    # a normal gutter): the values always END and START at the same x, the gap is clearly wider
+    # than a word space (3 pt), and the header shows the same two edges
+    def row(y, life, country):
+        x_end = 300.0
+        return [dict(x0=10, y0=y, x1=40, y1=y + 10, t="Alpha"),
+                dict(x0=x_end - 5 * len(life), y0=y, x1=x_end, y1=y + 10, t=life)] + \
+            line(y, (305, country))
+    words = lines(line(10, (10, "Issuer")), [dict(x0=280, y0=10, x1=300, y1=20, t="Life")],
+                  line(10, (305, "Country")),
+                  row(24, "5.77", "Germany"), row(38, "12.5", "United Kingdom"), row(52, "6.1", "France"))
+    df = build_table(words)
+    assert list(df.columns) == ["Issuer", "Life", "Country"]
+    assert df["Country"].tolist() == ["Germany", "United Kingdom", "France"]
+
+
+def test_section_label_under_the_header_is_not_the_bottom_header_line():
+    # header names touching on the real bottom line, then a 'Loan' section label
+    # (values and header names END at x=140 and START at x=145)
+    words = lines(line(10, (10, "Issuer"), (100, "Unfunded"), (145, "Security")),
+                  line(22, (110, "Amount"), (145, "Level")),
+                  line(36, (10, "Loan")),
+                  line(50, (10, "Alpha"), (120, "0.00"), (145, "Senior Secured")),
+                  line(64, (10, "Beta"), (110, "750.00"), (145, "Senior Secured")),
+                  line(78, (10, "Gamma"), (120, "0.00"), (145, "Second Lien")))
+    df = build_table(words)
+    assert list(df.columns)[:3] == ["Issuer", "Unfunded Amount", "Security Level"]
+    assert df["Security Level"].tolist() == ["Senior Secured", "Senior Secured", "Second Lien"]

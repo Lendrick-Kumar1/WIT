@@ -151,6 +151,7 @@ def column_cuts(rows, ws, n_hdr, lh):
         gut = _rescue_empty_columns(gut, head, lh)
     else:
         gut = find_gutters(lines, x0, x1, min_w=lh * 0.55, tolerance=0.12 if len(lines) >= 8 else 0.0)
+    gut = sorted(gut + _seams(body if len(body) >= 3 else lines, x0, x1, gut, head))
 
     def cut_in(a, b):
         spans = sorted((w["x0"], w["x1"]) for w in ws if w["x1"] > a and w["x0"] < b)
@@ -166,6 +167,44 @@ def column_cuts(rows, ws, n_hdr, lh):
         p, q = max(free, key=lambda t: t[1] - t[0])
         return (p + q) / 2
     return [x0 - 1] + [cut_in(a, b) for a, b in gut] + [x1 + 1], gut
+
+
+def _seams(lines, x0, x1, gut, head=(), share=0.8):
+    """Narrow gutters between two columns printed almost touching: a right-aligned column (all
+    its values END at the same x) right before a left-aligned one (all values START at the same
+    x). Taken only when, on most lines with a value right of it, the gap is clearly wider than a word space and both edges
+    line up within 1 pt; and the text on one side changes from line to line, or a header line
+    shows the same two edges (a repeated two-word cell like 'Senior Secured' is not two columns)."""
+    if len(lines) < 3:
+        return []
+    lh = line_height([w for r in lines for w in r["ws"]])
+    gaps = [(u["x1"], v["x0"]) for r in lines for u, v in zip(r["ws"], r["ws"][1:])
+            if 0 < v["x0"] - u["x1"] < 0.6 * lh]                 # word spaces (and narrow seams)
+    out = []
+    for a, b in find_gutters(lines, x0, x1, min_w=0.5, tolerance=0.0):
+        if any(min(b, gb) > max(a, ga) for ga, gb in gut):
+            continue                               # already a gutter
+        other = [q - p for p, q in gaps if q < a or p > b]   # word spaces elsewhere
+        space = st.median(other) if other else 0.25 * lh
+        pairs = []
+        for r in lines:
+            left = [w for w in r["ws"] if a - 1.5 <= w["x1"] <= a + 0.5]      # touching the gap
+            right = [w for w in r["ws"] if b - 0.5 <= w["x0"] <= b + 1.5]
+            if left and right and right[0]["x0"] - left[-1]["x1"] >= 1.6 * space:
+                pairs.append((left[-1], right[0]))
+        # lines with a value in the right-hand column (subtotal lines may only fill the left one)
+        n_right = sum(any(a - 0.5 <= w["x0"] <= b + 1.5 for w in r["ws"]) for r in lines)
+        if len(pairs) < max(2, share * n_right):
+            continue
+        ends = [lw["x1"] for lw, _ in pairs]
+        starts = [rw["x0"] for _, rw in pairs]
+        e, s0 = st.median(ends), st.median(starts)
+        varies = len({lw["t"] for lw, _ in pairs}) > 1 or len({rw["t"] for _, rw in pairs}) > 1
+        in_header = any(any(abs(w["x1"] - e) <= 1 for w in r["ws"]) and any(abs(w["x0"] - s0) <= 1 for w in r["ws"])
+                        for r in head)
+        if max(ends) - min(ends) <= 1 and max(starts) - min(starts) <= 1 and (varies or in_header):
+            out.append((max(ends), min(starts)))
+    return out
 
 
 def _rescue_empty_columns(gut, head, lh):
@@ -205,8 +244,13 @@ def header_names(rows, n_hdr, cuts, gut, lh, vocab=()):
             k = col_of(cx(w))
             e = extent[k]
             extent[k] = (w["x0"], w["x1"]) if e is None else (min(e[0], w["x0"]), max(e[1], w["x1"]))
+    # the bottom header line; a last line holding only a column-0 label is a section label
+    # ('Loan'), not header (split_sections takes it), so the line above it is the bottom one
+    bottom = n_hdr - 1
+    if n_hdr > 1 and all(cx(w) < cuts[1] for w in rows[bottom]["ws"]):
+        bottom -= 1
     for r in rows[:n_hdr]:
-        if r is rows[n_hdr - 1]:
+        if r is rows[bottom]:
             _bottom_header_line(r, header, extent, gut, lh, vocab, col_of)
         else:
             _upper_header_line(r, rows, n_hdr, header, cuts, lh, col_of)
@@ -263,10 +307,10 @@ def _upper_header_line(r, rows, n_hdr, header, cuts, lh, col_of):
             return min(w["x1"], cuts[k + 1]) - max(w["x0"], cuts[k]) >= 0.8 * (w["x1"] - w["x0"])
 
         def aligned(w):            # the header word right below starts, ends or centres with it
-            k = col_of(cx(w))
+            k = col_of(cx(w))      # (or there is none: the word is that column's whole name)
             below = [v for rr in rows[:n_hdr] if rr["c"] > r["c"] for v in rr["ws"] if col_of(cx(v)) == k]
             if not below:
-                return False
+                return True
             v = min(below, key=lambda v: v["y0"])
             return abs(v["x0"] - w["x0"]) < 2 or abs(v["x1"] - w["x1"]) < 2 or abs(cx(v) - cx(w)) < 0.5 * lh
         word_cols = {col_of(cx(w)) for w in ph}
